@@ -32,7 +32,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
 function toast(text, kind = "") {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
-  el.textContent = text;
+  el.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${
+    kind === "ok" ? '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>'
+    : kind === "error" ? '<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/>'
+    : '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'}</svg><span></span>`;
+  el.querySelector("span").textContent = text;
   $toasts.appendChild(el);
   setTimeout(() => el.remove(), kind === "error" ? 9000 : 5000);
 }
@@ -272,7 +276,7 @@ async function unlockSite(s) {
 // ───────────────────────── تحميل البيانات ─────────────────────────
 
 async function loadSites() {
-  $view.innerHTML = `<div class="center muted">جارٍ جلب المستودعات من GitHub…</div>`;
+  $view.innerHTML = loadingView("جارٍ جلب المستودعات من GitHub…");
   try {
     const repos = await ghAll("/user/repos?affiliation=owner&sort=updated");
     const withPages = repos.filter((r) => r.has_pages && r.name !== DASHBOARD_REPO);
@@ -285,6 +289,7 @@ async function loadSites() {
       return { repo, pages, record: records[repo.name] || null };
     }));
     sites = sites.filter((s) => s.pages);
+    ui.loadedAt = new Date();
     renderSites();
   } catch (e) {
     if (e.status === 401) {
@@ -293,8 +298,10 @@ async function loadSites() {
       renderTokenForm();
       return;
     }
-    $view.innerHTML = `<div class="card narrow"><h2>حدث خطأ</h2><p>${esc(e.message)}</p>
-      <button class="primary" id="retry">إعادة المحاولة</button></div>`;
+    $view.innerHTML = panel({
+      iconName: "alert", title: "حدث خطأ",
+      body: `<p class="center">${esc(e.message)}</p><button class="primary block" id="retry">إعادة المحاولة</button>`,
+    });
     document.getElementById("retry").onclick = loadSites;
   }
 }
@@ -310,34 +317,117 @@ async function refreshOne(name) {
 
 // ───────────────────────── الواجهة ─────────────────────────
 
+const VIEW_KEY = "qb-omnis.view";
+const THEME_KEY = "qb-omnis.theme";
+const ui = {
+  filter: "all",        // all | on | off | unlinked
+  query: "",
+  mode: (() => { try { return localStorage.getItem(VIEW_KEY) || "list"; } catch { return "list"; } })(),
+  loadedAt: null,
+};
+const drafts = new Map(); // نصوص رسائل الإغلاق أثناء الكتابة، حتى لا تضيع عند إعادة الرسم
+
+// أيقونات SVG خفيفة بنمط خطّي
+const ICONS = {
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  power: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
+  stop: '<circle cx="12" cy="12" r="9"/><path d="M9 9h6v6H9z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  unlink: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/><path d="M3 3l18 18"/>',
+  zap: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  logout: '<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M14 7l5 5-5 5M19 12H9"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9a6 6 0 0 1-6 6H6"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  alert: '<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+  google: '<path d="M20 12a8 8 0 1 1-2.3-5.6M20 12h-8"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+};
+const icon = (name, cls = "") => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+
+function currentTheme() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t;
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+function toggleTheme() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch {}
+  renderUser();
+}
+
+const timeAgo = (d) => {
+  if (!d) return "";
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return "الآن";
+  const m = Math.round(s / 60);
+  if (m < 60) return `قبل ${m} دقيقة`;
+  return d.toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" });
+};
+
+function loadingView(text) {
+  return `<div class="loading-screen"><span class="spinner"></span>${esc(text)}</div>`;
+}
+
+/** صندوق بسيط للشاشات المستقلة (الدخول، المفتاح، الأخطاء) */
+function panel({ iconName, title, body }) {
+  return `
+    <div class="box narrow">
+      <div class="box-body">
+        ${iconName ? `<div class="auth-icon">${icon(iconName)}</div>` : ""}
+        <h2 class="${iconName ? "center" : ""}">${title}</h2>
+        ${body}
+      </div>
+    </div>`;
+}
+
 function renderUser() {
-  if (!currentUser) { $user.innerHTML = ""; return; }
-  $user.innerHTML = `
-    ${currentUser.photoURL ? `<img src="${esc(currentUser.photoURL)}" alt="">` : ""}
-    <span class="muted">${esc(currentUser.displayName || currentUser.email || "")}</span>
-    ${getToken() ? `<button class="ghost" id="change-token">مفتاح GitHub</button>` : ""}
-    <button class="ghost" id="logout">خروج</button>`;
-  document.getElementById("logout").onclick = () => signOut(auth);
-  const ct = document.getElementById("change-token");
-  if (ct) ct.onclick = renderTokenForm;
+  if (!currentUser) {
+    $user.innerHTML = `<button class="ghost btn-icon" id="theme" title="تبديل المظهر">${icon(currentTheme() === "dark" ? "sun" : "moon")}</button>`;
+  } else {
+    $user.innerHTML = `
+      <button class="ghost btn-icon" id="theme" title="تبديل المظهر">${icon(currentTheme() === "dark" ? "sun" : "moon")}</button>
+      ${getToken() ? `<button class="btn-sm" id="change-token" title="مفتاح GitHub">${icon("key")}<span>المفتاح</span></button>` : ""}
+      <button class="btn-sm" id="logout" title="تسجيل الخروج">${icon("logout")}<span>خروج</span></button>
+      <span class="user-name">${esc(currentUser.displayName || currentUser.email || "")}</span>
+      ${currentUser.photoURL ? `<img class="avatar" src="${esc(currentUser.photoURL)}" alt="">` : ""}`;
+    document.getElementById("logout").onclick = () => signOut(auth);
+    const ct = document.getElementById("change-token");
+    if (ct) ct.onclick = renderTokenForm;
+  }
+  document.getElementById("theme").onclick = toggleTheme;
 }
 
 function renderSetupNeeded() {
-  $view.innerHTML = `
-    <div class="card narrow">
-      <h2>الإعداد غير مكتمل</h2>
-      <p>افتح ملف <code>firebase-config.js</code> وضع إعدادات مشروع Firebase الخاص بك، ثم ارفع الملف من جديد.</p>
-      <p class="muted">الخطوات الكاملة موجودة في ملف <code>README.md</code>.</p>
-    </div>`;
+  $view.innerHTML = panel({
+    iconName: "settings",
+    title: "الإعداد غير مكتمل",
+    body: `<p>افتح ملف <code>firebase-config.js</code> وضع إعدادات مشروع Firebase الخاص بك، ثم ارفع الملف من جديد.</p>
+      <p class="muted">الخطوات الكاملة موجودة في ملف <code>README.md</code>.</p>`,
+  });
 }
 
 function renderSignIn() {
-  $view.innerHTML = `
-    <div class="card narrow center">
-      <h2>تسجيل الدخول</h2>
-      <p class="muted">هذه اللوحة خاصة بمالكها فقط.</p>
-      <button class="primary" id="login">الدخول بحساب Google</button>
-    </div>`;
+  $view.innerHTML = panel({
+    iconName: "lock",
+    title: "تسجيل الدخول إلى QB-OMNIS",
+    body: `<p class="muted center">هذه اللوحة خاصة بمالكها فقط.</p>
+      <button class="primary block" id="login">${icon("user")} الدخول بحساب Google</button>`,
+  });
   document.getElementById("login").onclick = async () => {
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
     catch (e) { toast(`فشل تسجيل الدخول: ${e.message}`, "error"); }
@@ -345,24 +435,24 @@ function renderSignIn() {
 }
 
 function renderNotAdmin() {
-  $view.innerHTML = `
-    <div class="card narrow">
-      <h2>هذا الحساب غير مصرّح له</h2>
-      <p>إذا كان هذا حسابك وتقوم بالإعداد الآن، انسخ المعرّف التالي وضعه في
+  $view.innerHTML = panel({
+    iconName: "alert",
+    title: "هذا الحساب غير مصرّح له",
+    body: `<p>إذا كان هذا حسابك وتقوم بالإعداد الآن، انسخ المعرّف التالي وضعه في
         <code>ADMIN_UID</code> داخل <code>firebase-config.js</code> وفي <code>firestore.rules</code>:</p>
-      <div class="row"><input class="ltr" id="uid" readonly value="${esc(currentUser.uid)}">
-        <button id="copy-uid">نسخ</button></div>
-    </div>`;
+      <div class="row" style="flex-wrap:nowrap"><input class="ltr" id="uid" readonly value="${esc(currentUser.uid)}">
+        <button id="copy-uid">${icon("copy")} نسخ</button></div>`,
+  });
   document.getElementById("copy-uid").onclick = () => {
     navigator.clipboard?.writeText(currentUser.uid).then(() => toast("تم النسخ", "ok"));
   };
 }
 
 function renderTokenForm() {
-  $view.innerHTML = `
-    <div class="card narrow">
-      <h2>مفتاح GitHub</h2>
-      <p>تحتاج اللوحة مفتاح <b>Fine-grained token</b> لتتحكم بإعدادات GitHub Pages.
+  $view.innerHTML = panel({
+    iconName: "key",
+    title: "مفتاح GitHub",
+    body: `<p>تحتاج اللوحة مفتاح <b>Fine-grained token</b> لتتحكم بإعدادات GitHub Pages.
         المفتاح يُحفظ في هذا المتصفح فقط ولا يُرسل إلى أي مكان غير GitHub.</p>
       <ol>
         <li>افتح <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">إنشاء مفتاح جديد</a>.</li>
@@ -372,13 +462,16 @@ function renderTokenForm() {
       </ol>
       <label for="token">المفتاح</label>
       <input class="ltr" id="token" type="password" placeholder="github_pat_…" autocomplete="off">
-      <div class="row" style="margin-top:12px">
+      <div class="row" style="margin-top:16px">
         <button class="primary" id="save-token">حفظ ومتابعة</button>
-        ${getToken() ? `<button id="cancel-token">إلغاء</button><button class="ghost" id="clear-token">حذف المفتاح المحفوظ</button>` : ""}
-      </div>
-    </div>`;
+        ${getToken() ? `<button id="cancel-token">إلغاء</button><button class="danger" id="clear-token">حذف المفتاح المحفوظ</button>` : ""}
+      </div>`,
+  });
+  const $token = document.getElementById("token");
+  $token.focus();
+  $token.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("save-token").click(); });
   document.getElementById("save-token").onclick = async () => {
-    const t = document.getElementById("token").value.trim();
+    const t = $token.value.trim();
     if (!t) return;
     setToken(t);
     try {
@@ -397,78 +490,267 @@ function renderTokenForm() {
   if (clear) clear.onclick = () => { setToken(""); renderUser(); renderTokenForm(); };
 }
 
-function siteCard(s) {
+// ───── بيانات اللوحة ─────
+
+function counts() {
+  const locked = sites.filter(isLocked).length;
+  return {
+    all: sites.length,
+    on: sites.length - locked,
+    off: locked,
+    unlinked: sites.filter((s) => !s.record).length,
+    instant: sites.filter((s) => s.record?.instant).length,
+  };
+}
+
+function filteredSites() {
+  const q = ui.query.trim().toLowerCase();
+  return sites.filter((s) => {
+    if (ui.filter === "on" && isLocked(s)) return false;
+    if (ui.filter === "off" && !isLocked(s)) return false;
+    if (ui.filter === "unlinked" && s.record) return false;
+    if (q && !s.repo.name.toLowerCase().includes(q) && !String(s.pages?.html_url || "").toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+// ───── أجزاء الموقع الواحد ─────
+
+function siteParts(s) {
   const name = s.repo.name;
   const locked = isLocked(s);
   const linked = !!s.record;
   const working = busy.has(name);
   const url = s.pages?.html_url;
-  const message = s.record?.message || DEFAULT_MESSAGE;
-
-  const status = locked
-    ? `<span class="badge off">مغلق</span>`
-    : `<span class="badge on">يعمل</span>`;
+  const message = drafts.get(name) ?? s.record?.message ?? DEFAULT_MESSAGE;
+  const dis = working ? "disabled" : "";
+  const n = esc(name);
 
   let actions;
   if (!linked) {
-    actions = `<button class="primary" data-act="link" data-name="${esc(name)}" ${working ? "disabled" : ""}>ربط بالموقع</button>`;
+    actions = `<button class="accent btn-sm" data-act="link" data-name="${n}" ${dis}>${icon("link")} ربط بالموقع</button>`;
   } else if (locked) {
     actions = `
-      <button class="success" data-act="unlock" data-name="${esc(name)}" ${working ? "disabled" : ""}>تشغيل الموقع</button>
-      <button data-act="update" data-name="${esc(name)}" ${working ? "disabled" : ""}>تحديث الرسالة</button>`;
+      <button class="success btn-sm" data-act="unlock" data-name="${n}" ${dis}>${icon("power")} تشغيل الموقع</button>
+      <button class="btn-sm" data-act="update" data-name="${n}" ${dis}>${icon("edit")} تحديث الرسالة</button>`;
   } else {
-    const instantAct = s.record?.instant ? "instant-off" : "instant-on";
-    const instantLabel = s.record?.instant ? "إزالة الإغلاق الفوري" : "⚡ تفعيل الإغلاق الفوري";
+    const instant = !!s.record?.instant;
     actions = `
-      <button class="danger" data-act="lock" data-name="${esc(name)}" ${working ? "disabled" : ""}>إطفاء الموقع</button>
-      <button class="ghost" data-act="${instantAct}" data-name="${esc(name)}" ${working ? "disabled" : ""}>${instantLabel}</button>`;
+      <button class="danger btn-sm" data-act="lock" data-name="${n}" ${dis}>${icon("power")} إطفاء الموقع</button>
+      <button class="btn-sm" data-act="${instant ? "instant-off" : "instant-on"}" data-name="${n}" ${dis}>
+        ${icon("zap")} ${instant ? "إزالة الإغلاق الفوري" : "تفعيل الإغلاق الفوري"}</button>`;
   }
+  if (working) actions += `<span class="working"><span class="spinner"></span>جارٍ التنفيذ…</span>`;
 
+  const source = locked
+    ? `النشر الأصلي: ${s.record?.original ? describeSource(s.record.original) : "غير محفوظ"}`
+    : describeSource(s.pages);
+
+  const state = locked
+    ? `<span class="state off">${icon("stop")} مغلق</span>`
+    : `<span class="state on">${icon("check")} يعمل</span>`;
+
+  const badges = `
+    ${linked ? `<span class="badge neutral">${icon("link")} مربوط</span>` : `<span class="badge warn">${icon("unlink")} غير مربوط</span>`}
+    ${s.record?.instant ? `<span class="badge done">${icon("zap")} إغلاق فوري</span>` : ""}
+    ${s.repo.private ? `<span class="badge neutral">${icon("lock")} خاص</span>` : ""}`;
+
+  const link = url
+    ? `<a class="site-url" href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//, ""))} ${icon("external")}</a>`
+    : "";
+
+  const msg = linked ? `
+    <details class="msg" ${locked || drafts.has(name) ? "open" : ""}>
+      <summary>${icon("edit")} سبب الإغلاق (يظهر للزوار)</summary>
+      <label class="sr-only" for="msg-${n}">سبب الإغلاق</label>
+      <textarea id="msg-${n}" data-msg="${n}">${esc(message)}</textarea>
+    </details>` : "";
+
+  return { name: n, locked, state, badges, link, source, actions, msg };
+}
+
+function siteRow(s) {
+  const p = siteParts(s);
   return `
-    <article class="card site">
-      <div class="site-head">
-        <div>
-          <h3>${esc(name)}</h3>
-          ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>` : ""}
+    <div class="box-row site-row">
+      <span class="status-dot ${p.locked ? "off" : "on"}" title="${p.locked ? "مغلق" : "يعمل"}">${icon(p.locked ? "stop" : "check")}</span>
+      <div>
+        <div class="site-title"><h4>${p.name}</h4>${p.badges}</div>
+        ${p.link}
+        <div class="meta-inline">
+          <span>${icon("branch")} ${esc(p.source)}</span>
+          <span>${icon("clock")} آخر تحديث للمستودع ${esc(new Date(s.repo.pushed_at || s.repo.updated_at).toLocaleDateString("ar"))}</span>
         </div>
-        ${status}
+        ${p.msg}
       </div>
-      <div class="meta">
-        <span class="badge neutral">${locked ? "النشر الأصلي: " + esc(s.record?.original ? describeSource(s.record.original) : "غير محفوظ") : esc(describeSource(s.pages))}</span>
-        ${linked ? `<span class="badge neutral">مربوط</span>` : `<span class="badge warn">غير مربوط</span>`}
-        ${s.record?.instant ? `<span class="badge on">⚡ إغلاق فوري</span>` : ""}
-        ${s.repo.private ? `<span class="badge neutral">خاص</span>` : ""}
+      <div class="actions">${p.actions}</div>
+    </div>`;
+}
+
+function siteCard(s) {
+  const p = siteParts(s);
+  return `
+    <article class="site-card ${p.locked ? "off" : "on"}">
+      <div class="card-head">
+        <div style="min-width:0">
+          <div class="site-title"><h4>${p.name}</h4></div>
+          ${p.link}
+        </div>
+        ${p.state}
       </div>
-      ${linked ? `
-        <div>
-          <label for="msg-${esc(name)}">سبب الإغلاق (يظهر للزوار)</label>
-          <textarea id="msg-${esc(name)}" data-msg="${esc(name)}">${esc(message)}</textarea>
-        </div>` : ""}
-      <div class="actions">
-        ${actions}
-        ${working ? `<span class="muted">جارٍ التنفيذ…</span>` : ""}
-      </div>
+      <div class="meta">${p.badges}<span class="badge neutral">${icon("branch")} ${esc(p.source)}</span></div>
+      ${p.msg}
+      <div class="actions">${p.actions}</div>
     </article>`;
+}
+
+// ───── رسم اللوحة ─────
+
+function statCard({ label, value, iconName, tone, foot }) {
+  return `
+    <div class="box stat">
+      <div class="stat-top"><span>${label}</span><span class="stat-icon ${tone}">${icon(iconName)}</span></div>
+      <div class="stat-value">${value}</div>
+      ${foot ? `<div class="stat-foot">${foot}</div>` : ""}
+    </div>`;
+}
+
+function renderStats() {
+  const c = counts();
+  const pct = c.all ? Math.round((c.on / c.all) * 100) : 0;
+  document.getElementById("stats").innerHTML = [
+    statCard({ label: "إجمالي المواقع", value: c.all, iconName: "globe", tone: "accent", foot: "منشورة على GitHub Pages" }),
+    statCard({ label: "تعمل", value: c.on, iconName: "check", tone: "success",
+      foot: `<div class="meter" title="${pct}%"><span class="on" style="width:${pct}%"></span></div>` }),
+    statCard({ label: "مغلقة", value: c.off, iconName: "stop", tone: "danger", foot: c.off ? "تعرض صفحة الإغلاق للزوار" : "لا توجد مواقع مغلقة" }),
+    statCard({ label: "غير مربوطة", value: c.unlinked, iconName: "unlink", tone: "attention", foot: `${c.instant} بإغلاق فوري مفعّل` }),
+  ].join("");
+
+  document.getElementById("sidebar-stats").innerHTML = `
+    <li><span><i class="dot" style="background:var(--success)"></i>تعمل</span><b>${c.on}</b></li>
+    <li><span><i class="dot" style="background:var(--danger)"></i>مغلقة</span><b>${c.off}</b></li>
+    <li><span><i class="dot" style="background:var(--attention)"></i>غير مربوطة</span><b>${c.unlinked}</b></li>
+    <li><span><i class="dot" style="background:var(--done)"></i>إغلاق فوري</span><b>${c.instant}</b></li>
+    <li style="padding-top:10px"><div class="meter" style="flex:1">
+      <span class="on" style="width:${c.all ? (c.on / c.all) * 100 : 0}%"></span>
+      <span class="off" style="width:${c.all ? (c.off / c.all) * 100 : 0}%"></span></div></li>`;
+
+  const tabs = [["all", "الكل"], ["on", "تعمل"], ["off", "مغلقة"], ["unlinked", "غير مربوطة"]];
+  document.getElementById("tabs").innerHTML = tabs.map(([key, label]) => `
+    <button class="tab" role="tab" data-filter="${key}" aria-selected="${ui.filter === key}">
+      ${label} <span class="counter">${c[key]}</span></button>`).join("");
+
+  const upd = document.getElementById("updated");
+  if (upd) upd.textContent = ui.loadedAt ? `آخر جلب: ${timeAgo(ui.loadedAt)}` : "";
+}
+
+function renderList() {
+  const $list = document.getElementById("site-list");
+  const list = filteredSites();
+  document.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === ui.mode)));
+
+  if (!sites.length) {
+    $list.innerHTML = `<div class="blankslate">${icon("globe")}<h3>لا توجد مواقع</h3>
+      <p>لا توجد مستودعات فيها GitHub Pages مفعّل.</p></div>`;
+    return;
+  }
+  if (!list.length) {
+    $list.innerHTML = `<div class="blankslate">${icon("search")}<h3>لا توجد نتائج</h3>
+      <p>لا توجد مواقع تطابق التصفية الحالية.</p></div>`;
+    return;
+  }
+  $list.innerHTML = ui.mode === "grid"
+    ? `<div class="grid">${list.map(siteCard).join("")}</div>`
+    : list.map(siteRow).join("");
+}
+
+function renderShell() {
+  const u = currentUser || {};
+  $view.innerHTML = `
+    <div class="layout" id="dash">
+      <aside class="sidebar">
+        <div class="box box-body">
+          <div class="profile">
+            ${u.photoURL ? `<img src="${esc(u.photoURL)}" alt="">` : `<span class="auth-icon" style="margin:0;width:48px;height:48px">${icon("user")}</span>`}
+            <div style="min-width:0"><b>${esc(u.displayName || "المالك")}</b><span>${esc(u.email || "")}</span></div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="box-header"><h3>ملخص الحالة</h3></div>
+          <div class="box-body"><ul class="side-list" id="sidebar-stats"></ul></div>
+        </div>
+        <div class="box">
+          <div class="box-header"><h3>روابط سريعة</h3></div>
+          <div class="box-body">
+            <ul class="side-list">
+              <li><a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">${icon("key")} مفاتيح GitHub</a></li>
+              <li><a href="https://github.com/${esc(sites[0]?.repo.owner.login || "")}?tab=repositories" target="_blank" rel="noopener">${icon("branch")} المستودعات</a></li>
+              <li><a href="https://www.githubstatus.com" target="_blank" rel="noopener">${icon("info")} حالة GitHub</a></li>
+            </ul>
+          </div>
+        </div>
+      </aside>
+
+      <section class="content">
+        <div class="page-head">
+          <div>
+            <h2>نظرة عامة</h2>
+            <p>تحكّم في تشغيل وإطفاء مواقعك المنشورة على GitHub Pages.</p>
+          </div>
+          <div class="row">
+            <span class="muted" id="updated" style="font-size:12px"></span>
+            <button id="reload">${icon("refresh")} تحديث</button>
+          </div>
+        </div>
+
+        <div class="stats" id="stats"></div>
+
+        <div class="box">
+          <div class="toolbar">
+            <nav class="tabs" role="tablist" id="tabs"></nav>
+            <div class="tools">
+              <div class="search">${icon("search")}
+                <input id="q" type="search" placeholder="ابحث عن موقع…" value="${esc(ui.query)}" autocomplete="off">
+              </div>
+              <div class="segmented" role="group" aria-label="طريقة العرض">
+                <button data-mode="list" title="قائمة">${icon("list")}</button>
+                <button data-mode="grid" title="بطاقات">${icon("grid")}</button>
+              </div>
+            </div>
+          </div>
+          <div id="site-list"></div>
+        </div>
+
+        <div class="footer">QB-OMNIS · ${sites.length} موقع</div>
+      </section>
+    </div>`;
+
+  document.getElementById("reload").onclick = loadSites;
+  document.getElementById("q").addEventListener("input", (e) => { ui.query = e.target.value; renderList(); });
 }
 
 function renderSites() {
   renderUser();
-  const lockedCount = sites.filter(isLocked).length;
-  $view.innerHTML = `
-    <div class="toolbar">
-      <h2>المواقع المنشورة على GitHub Pages</h2>
-      <div class="stats">
-        <span class="badge neutral">الكل: ${sites.length}</span>
-        <span class="badge on">تعمل: ${sites.length - lockedCount}</span>
-        <span class="badge off">مغلقة: ${lockedCount}</span>
-        <button id="reload">تحديث</button>
-      </div>
-    </div>
-    ${sites.length
-      ? `<div class="grid">${sites.map(siteCard).join("")}</div>`
-      : `<div class="card center muted">لا توجد مستودعات فيها GitHub Pages مفعّل.</div>`}`;
-  document.getElementById("reload").onclick = loadSites;
+  if (!document.getElementById("dash")) renderShell();
+  renderStats();
+  renderList();
 }
+
+// التبويبات وطريقة العرض وحفظ المسودات
+$view.addEventListener("click", (ev) => {
+  const tab = ev.target.closest("[data-filter]");
+  if (tab) { ui.filter = tab.dataset.filter; renderStats(); renderList(); return; }
+  const mode = ev.target.closest("[data-mode]");
+  if (mode) {
+    ui.mode = mode.dataset.mode;
+    try { localStorage.setItem(VIEW_KEY, ui.mode); } catch {}
+    renderList();
+  }
+});
+$view.addEventListener("input", (ev) => {
+  const t = ev.target.closest("textarea[data-msg]");
+  if (t) drafts.set(t.dataset.msg, t.value);
+});
 
 $view.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-act]");
@@ -496,9 +778,11 @@ $view.addEventListener("click", async (ev) => {
       toast(`تم ربط ${name}`, "ok");
     } else if (act === "lock") {
       await lockSite(s, message);
+      drafts.delete(name);
       toast(`تم إطفاء ${name}. قد يستغرق ظهور صفحة الإغلاق دقيقة أو دقيقتين.`, "ok");
     } else if (act === "update") {
       await lockSite(s, message);
+      drafts.delete(name);
       toast(`تم تحديث رسالة ${name}`, "ok");
     } else if (act === "unlock") {
       const note = await unlockSite(s);
