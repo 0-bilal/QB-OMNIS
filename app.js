@@ -11,6 +11,9 @@ import { maintenancePage } from "./maintenance-template.js";
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
 const DEFAULT_MESSAGE = "هذا الموقع غير متاح حالياً. نعتذر عن الإزعاج، يرجى المحاولة لاحقاً.";
+// رابط سكربت الإغلاق الفوري (lock.js بجانب اللوحة على GitHub Pages)
+const LOCK_SRC = new URL("lock.js", location.href).href;
+const SNIPPET_RE = /[ \t]*<script[^>]*data-qb-omnis[^>]*><\/script>[ \t]*\r?\n?/gi;
 
 const $view = document.getElementById("view");
 const $user = document.getElementById("user-area");
@@ -133,6 +136,82 @@ async function redeployWorkflow(owner, name, branch) {
   }
 }
 
+// ───────────────────────── الإغلاق الفوري ─────────────────────────
+
+const snippetFor = (name) =>
+  `<script type="module" data-qb-omnis src="${LOCK_SRC}?site=${encodeURIComponent(name)}"></script>`;
+
+function b64ToText(b64) {
+  const bin = atob(String(b64).replace(/\s/g, ""));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+
+function addSnippet(html, name) {
+  const tag = snippetFor(name);
+  const m = html.match(/<head(\s[^>]*)?>/i);
+  if (m) {
+    const i = m.index + m[0].length;
+    return `${html.slice(0, i)}\n  ${tag}${html.slice(i)}`;
+  }
+  return `${tag}\n${html}`;
+}
+
+/**
+ * يضيف (أو يزيل) سطر سكربت الإغلاق الفوري في ملفات HTML بالمستودع، في commit واحد.
+ * - النشر من فرع: كل ملفات ‎.html في مجلد النشر.
+ * - GitHub Actions: ملف index.html الرئيسي (Vite) أو public/index.html (Create React App).
+ */
+async function setInstantLock(s, enable) {
+  const owner = s.repo.owner.login, name = s.repo.name;
+  const cfg = originalConfig(s.pages);
+  const workflow = cfg.build_type === "workflow";
+  const branch = workflow ? s.repo.default_branch : cfg.source.branch;
+  const srcPath = workflow ? "/" : (cfg.source.path || "/");
+  const base = srcPath === "/" ? "" : srcPath.replace(/^\/|\/$/g, "") + "/";
+
+  const ref = await gh(`/repos/${owner}/${name}/git/ref/heads/${branch}`);
+  const head = await gh(`/repos/${owner}/${name}/git/commits/${ref.object.sha}`);
+  const { tree } = await gh(`/repos/${owner}/${name}/git/trees/${head.tree.sha}?recursive=1`);
+  const blobs = tree.filter((t) => t.type === "blob");
+
+  let targets;
+  if (workflow) {
+    const entry = blobs.find((t) => t.path === "index.html") || blobs.find((t) => t.path === "public/index.html");
+    targets = entry ? [entry] : [];
+  } else {
+    targets = blobs.filter((t) => t.path.startsWith(base) && /\.html?$/i.test(t.path) && !/(^|\/)node_modules\//.test(t.path));
+  }
+  if (!targets.length) throw new Error("لم أجد ملف index.html في المستودع");
+  if (targets.length > 150) throw new Error(`عدد ملفات HTML كبير جداً (${targets.length})`);
+
+  const changes = [];
+  for (const t of targets) {
+    const blob = await gh(`/repos/${owner}/${name}/git/blobs/${t.sha}`);
+    const html = b64ToText(blob.content);
+    const has = /data-qb-omnis/i.test(html);
+    let next = null;
+    if (enable && !has) next = addSnippet(html, name);
+    if (!enable && has) next = html.replace(SNIPPET_RE, "");
+    if (next !== null && next !== html) changes.push({ path: t.path, mode: t.mode, type: "blob", content: next });
+  }
+
+  if (changes.length) {
+    const newTree = await gh(`/repos/${owner}/${name}/git/trees`, {
+      method: "POST", body: { base_tree: head.tree.sha, tree: changes },
+    });
+    const commit = await gh(`/repos/${owner}/${name}/git/commits`, {
+      method: "POST",
+      body: {
+        message: enable ? "QB-OMNIS: تفعيل الإغلاق الفوري" : "QB-OMNIS: إزالة الإغلاق الفوري",
+        tree: newTree.sha, parents: [head.sha],
+      },
+    });
+    await gh(`/repos/${owner}/${name}/git/refs/heads/${branch}`, { method: "PATCH", body: { sha: commit.sha } });
+  }
+  await saveRecord(name, { instant: enable });
+  return { count: changes.length, branch };
+}
+
 // ───────────────────────── Firestore ─────────────────────────
 
 const saveRecord = (name, data) => setDoc(doc(db, "sites", name), data, { merge: true });
@@ -154,18 +233,25 @@ async function linkSite(s) {
 async function lockSite(s, message) {
   const owner = s.repo.owner.login, name = s.repo.name;
   const alreadyLocked = isLocked(s);
-  const original = alreadyLocked ? (s.record?.original || null) : originalConfig(s.pages);
-
-  await writeMaintenanceBranch(owner, name, message);
-  // نحفظ الإعداد الأصلي قبل تغييره، حتى نستطيع استرجاعه دائماً
-  await saveRecord(name, { original, message, owner, repo: name });
-  if (!alreadyLocked) {
-    await gh(`/repos/${owner}/${name}/pages`, {
-      method: "PUT", body: { build_type: "legacy", source: { branch: MAINT_BRANCH, path: "/" } },
-    });
+  // 1) Firestore أولاً: يُغلق الموقع فوراً عند الزوار (إن كان الإغلاق الفوري مفعّلاً)،
+  //    ونحفظ الإعداد الأصلي قبل تغييره حتى نستطيع استرجاعه دائماً
+  await saveRecord(name, {
+    enabled: false, message, owner, repo: name, lockedAt: serverTimestamp(),
+    ...(alreadyLocked ? {} : { original: originalConfig(s.pages) }),
+  });
+  // 2) الإغلاق الحقيقي على GitHub Pages
+  try {
+    await writeMaintenanceBranch(owner, name, message);
+    if (!alreadyLocked) {
+      await gh(`/repos/${owner}/${name}/pages`, {
+        method: "PUT", body: { build_type: "legacy", source: { branch: MAINT_BRANCH, path: "/" } },
+      });
+    }
+    await requestPagesBuild(owner, name);
+  } catch (e) {
+    if (!alreadyLocked) await saveRecord(name, { enabled: true }).catch(() => {});
+    throw e;
   }
-  await requestPagesBuild(owner, name);
-  await saveRecord(name, { enabled: false, lockedAt: serverTimestamp() });
 }
 
 async function unlockSite(s) {
@@ -331,7 +417,11 @@ function siteCard(s) {
       <button class="success" data-act="unlock" data-name="${esc(name)}" ${working ? "disabled" : ""}>تشغيل الموقع</button>
       <button data-act="update" data-name="${esc(name)}" ${working ? "disabled" : ""}>تحديث الرسالة</button>`;
   } else {
-    actions = `<button class="danger" data-act="lock" data-name="${esc(name)}" ${working ? "disabled" : ""}>إطفاء الموقع</button>`;
+    const instantAct = s.record?.instant ? "instant-off" : "instant-on";
+    const instantLabel = s.record?.instant ? "إزالة الإغلاق الفوري" : "⚡ تفعيل الإغلاق الفوري";
+    actions = `
+      <button class="danger" data-act="lock" data-name="${esc(name)}" ${working ? "disabled" : ""}>إطفاء الموقع</button>
+      <button class="ghost" data-act="${instantAct}" data-name="${esc(name)}" ${working ? "disabled" : ""}>${instantLabel}</button>`;
   }
 
   return `
@@ -346,6 +436,7 @@ function siteCard(s) {
       <div class="meta">
         <span class="badge neutral">${locked ? "النشر الأصلي: " + esc(s.record?.original ? describeSource(s.record.original) : "غير محفوظ") : esc(describeSource(s.pages))}</span>
         ${linked ? `<span class="badge neutral">مربوط</span>` : `<span class="badge warn">غير مربوط</span>`}
+        ${s.record?.instant ? `<span class="badge on">⚡ إغلاق فوري</span>` : ""}
         ${s.repo.private ? `<span class="badge neutral">خاص</span>` : ""}
       </div>
       ${linked ? `
@@ -391,6 +482,11 @@ $view.addEventListener("click", async (ev) => {
 
   if (act === "lock" && !confirm(`إطفاء الموقع "${name}"؟\nسيظهر للزوار: ${message}`)) return;
   if (act === "unlock" && !confirm(`تشغيل الموقع "${name}" من جديد؟`)) return;
+  if (act === "instant-on" && !confirm(
+    `تفعيل الإغلاق الفوري على "${name}"؟\n\n` +
+    `سيُضاف سطر واحد إلى ملفات HTML في المستودع (commit جديد).\n` +
+    `إذا كانت لديك نسخة من المشروع على جهازك، اسحب التحديث (git pull) قبل أن تعدّل عليها.`)) return;
+  if (act === "instant-off" && !confirm(`إزالة الإغلاق الفوري من "${name}"؟ (commit جديد في المستودع)`)) return;
 
   busy.add(name);
   renderSites();
@@ -408,6 +504,12 @@ $view.addEventListener("click", async (ev) => {
       const note = await unlockSite(s);
       toast(`تم تشغيل ${name}. قد يستغرق ظهور الموقع دقيقة أو دقيقتين.`, "ok");
       if (note) toast(note, "error");
+    } else if (act === "instant-on" || act === "instant-off") {
+      const on = act === "instant-on";
+      const { count, branch } = await setInstantLock(s, on);
+      toast(count
+        ? `${on ? "تم تفعيل" : "تمت إزالة"} الإغلاق الفوري على ${name} (${count} ملف، فرع ${branch}). يظهر بعد إعادة نشر الموقع خلال دقيقة أو دقيقتين.`
+        : `${on ? "الإغلاق الفوري مفعّل مسبقاً" : "لا يوجد سكربت لإزالته"} في ${name}.`, "ok");
     }
   } catch (e) {
     const hint = e.status === 403 || e.status === 404
