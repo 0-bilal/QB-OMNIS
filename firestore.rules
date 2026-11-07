@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // حالة كل موقع: القراءة للجميع (يحتاجها سكربت الإغلاق الفوري)، والكتابة لك فقط
+    match /sites/{siteId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == "YOUR_ADMIN_UID";
+    }
+    // أي شيء آخر ممنوع
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
