@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#010409" media="(prefers-color-scheme: dark)">
   <title>QB-OMNIS · لوحة التحكم</title>
+  <script>
+    // تطبيق الثيم المحفوظ قبل رسم الصفحة لتجنب الوميض
+    try { const t = localStorage.getItem("qb-omnis.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,17 +19,16 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo" aria-hidden="true">◎</span>
-      <div>
-        <h1>QB-OMNIS</h1>
-        <p>لوحة التحكم بالمواقع</p>
-      </div>
+      <span class="brand-logo" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>
+      </span>
+      <div class="brand-title">QB-OMNIS<span class="sep">/</span><span class="sub">لوحة التحكم بالمواقع</span></div>
     </div>
     <div id="user-area" class="user-area"></div>
   </header>
 
   <main id="view" class="view">
-    <div class="center muted">جارٍ التحميل…</div>
+    <div class="loading-screen"><span class="spinner"></span>جارٍ التحميل…</div>
   </main>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
