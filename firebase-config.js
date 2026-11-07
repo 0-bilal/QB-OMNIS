@@ -11,7 +11,7 @@ export const firebaseConfig = {
 
 // معرّف حسابك (UID) في Firebase — يظهر لك في اللوحة بعد أول تسجيل دخول.
 // ضع نفس القيمة أيضاً في firestore.rules
-export const ADMIN_UID = "YOUR_ADMIN_UID";
+export const ADMIN_UID = "KZFk5qzmPHXrn046WGfkcmgSygy2";
 
 // اسم مستودع لوحة التحكم نفسها، حتى لا يظهر في القائمة ولا يُغلق بالخطأ.
 export const DASHBOARD_REPO = "QB-OMNIS";
