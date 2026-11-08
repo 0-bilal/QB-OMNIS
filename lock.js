@@ -5,8 +5,8 @@
 // إلى أن يكتمل الإغلاق الحقيقي من GitHub Pages خلال دقيقة أو دقيقتين.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
-import { maintenancePage } from "./maintenance-template.js";
+import { firebaseConfig } from "./firebase-config.js?v=3";
+import { maintenancePage } from "./maintenance-template.js?v=3";
 
 const param = new URL(import.meta.url).searchParams.get("site");
 const site = param || location.pathname.split("/").filter(Boolean)[0] || location.hostname;

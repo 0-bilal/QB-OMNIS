@@ -5,8 +5,11 @@ import {
 import {
   getFirestore, collection, getDocs, doc, setDoc, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js";
-import { maintenancePage } from "./maintenance-template.js";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=3";
+import { maintenancePage } from "./maintenance-template.js?v=3";
+
+// رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
+const APP_VERSION = "3";
 
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
@@ -727,7 +730,7 @@ function renderShell() {
           <div id="site-list"></div>
         </div>
 
-        <div class="footer">QB-OMNIS · ${sites.length} موقع</div>
+        <div class="footer">QB-OMNIS · ${sites.length} موقع · الإصدار ${APP_VERSION}</div>
       </section>
     </div>`;
 
