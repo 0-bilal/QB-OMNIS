@@ -30,6 +30,7 @@ const ICON = {
   globe: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
   calendar: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>',
   info: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
+  clock: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   chat: '<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
 };
 
@@ -39,11 +40,15 @@ const ICON = {
  * @param {string} o.message      سبب الإغلاق
  * @param {string} [o.serviceName] اسم الخدمة الظاهر للزوار
  * @param {Date|string} [o.closedAt] تاريخ الإغلاق
+ * @param {string} [o.headline]   العنوان الكبير حسب سبب الإغلاق
+ * @param {string} [o.returnAt]   موعد العودة المتوقع (للصيانة)
  */
-export function maintenancePage({ title = "", message = "", serviceName = "", closedAt = null } = {}) {
+export function maintenancePage({ title = "", message = "", serviceName = "", closedAt = null, headline = "", returnAt = "" } = {}) {
   const service = esc(serviceName || title);
   const msg = esc(message).replace(/\n/g, "<br>");
   const date = esc(formatDate(closedAt));
+  const head = esc(headline || "تم إغلاق هذا الموقع");
+  const back = esc(returnAt);
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -51,7 +56,7 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0d1117">
-<title>الموقع مغلق حالياً${service ? " · " + service : ""}</title>
+<title>${head}${service ? " · " + service : ""}</title>
 <link rel="icon" href="${FAVICON}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -94,6 +99,11 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
   figcaption { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #656d76; font-size: 14px; }
   figcaption .dot { width: 4px; height: 4px; border-radius: 50%; background: #d0d7de; }
   figcaption .when { display: inline-flex; align-items: center; gap: 6px; }
+  .back {
+    margin: 0; align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px;
+    background: #eaf1fd; color: #174aa8; font-size: 15px;
+  }
+  .back strong { font-weight: 700; }
   .note {
     margin: auto 0 0; padding-top: 20px; border-top: 1px solid #d8dee4;
     display: flex; align-items: flex-start; gap: 8px; color: #656d76; font-size: 14px;
@@ -165,7 +175,7 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
     </div>
 
     <div class="body">
-      <h1>تم إغلاق هذا الموقع</h1>
+      <h1>${head}</h1>
       <figure>
         <div class="quote-row">
           <span class="quote-mark" aria-hidden="true">”</span>
@@ -176,6 +186,7 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
           <span>— إدارة الموقع</span>
           ${date ? `<span class="dot" aria-hidden="true"></span><span class="when">${ICON.calendar}${date}</span>` : ""}
         </figcaption>
+        ${back ? `<p class="back">${ICON.clock}<span>العودة المتوقعة: <strong>${back}</strong></span></p>` : ""}
       </figure>
     </div>
 
