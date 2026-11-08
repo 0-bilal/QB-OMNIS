@@ -6,11 +6,11 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=6";
-import { maintenancePage } from "./maintenance-template.js?v=6";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=7";
+import { maintenancePage } from "./maintenance-template.js?v=7";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "6";
+const APP_VERSION = "7";
 
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
@@ -536,11 +536,25 @@ async function loadSiteVisits(name) {
     ...(to ? [where(documentId(), "<=", to)] : []));
   const agg = (q) => getAggregateFromServer(q, { open: sum("open"), closed: sum("closed") })
     .then((r) => ({ open: num(r.data().open), closed: num(r.data().closed) }));
-  const [recent, last30, prev30, total] = await Promise.all([
-    getDocs(range(dayKey(13))), agg(range(dayKey(29))), agg(range(dayKey(59), dayKey(30))), agg(days),
-  ]);
-  const byDay = Object.fromEntries(recent.docs.map((d) => [d.id, { open: num(d.data().open), closed: num(d.data().closed) }]));
-  return { days: byDay, last30, prev30, total };
+  const toDays = (snap) => Object.fromEntries(snap.docs.map((d) => [d.id, { open: num(d.data().open), closed: num(d.data().closed) }]));
+  try {
+    const [recent, last30, prev30, total] = await Promise.all([
+      getDocs(range(dayKey(13))), agg(range(dayKey(29))), agg(range(dayKey(59), dayKey(30))), agg(days),
+    ]);
+    return { days: toDays(recent), last30, prev30, total };
+  } catch (e) {
+    // احتياطي: إن فشل التجميع (sum) نقرأ كل المستندات اليومية ونجمعها هنا (قراءة لكل يوم)
+    console.warn(`QB-OMNIS: تجميع زيارات ${name} فشل، سأقرأ المستندات مباشرة`, e?.code, e?.message);
+    const all = toDays(await getDocs(days));
+    const between = (from, to) => {
+      const t = { open: 0, closed: 0 };
+      for (const [k, d] of Object.entries(all)) {
+        if ((!from || k >= from) && (!to || k <= to)) { t.open += d.open; t.closed += d.closed; }
+      }
+      return t;
+    };
+    return { days: all, last30: between(dayKey(29)), prev30: between(dayKey(59), dayKey(30)), total: between() };
+  }
 }
 
 async function loadVisits(names) {
@@ -549,7 +563,11 @@ async function loadVisits(names) {
   let failed = 0;
   results.forEach((r, i) => {
     if (r.status === "fulfilled") visits[names[i]] = r.value;
-    else { failed++; visits[names[i]] = { error: true }; }
+    else {
+      failed++;
+      visits[names[i]] = { error: true };
+      console.warn(`QB-OMNIS: تعذّر جلب زيارات ${names[i]}`, r.reason?.code, r.reason?.message);
+    }
   });
   // إن فشلت كل المواقع فغالباً قواعد Firestore الجديدة لم تُنشر بعد
   visitsAvailable = !names.length || failed < names.length;
