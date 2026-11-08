@@ -25,6 +25,38 @@ const LOGO = `<svg class="logo" dir="ltr" role="img" aria-label="شعار ${PUBL
 const FAVICON = "data:image/svg+xml," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="#1f6feb"/><g fill="none" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"><path stroke="#cae8ff" d="M22 21 11 32l11 11"/><path stroke="#fff" d="M37 17l-10 30"/><path stroke="#cae8ff" d="M42 21l11 11-11 11"/></g></svg>`);
 
+// رابط اللوحة على GitHub Pages: صفحة الإغلاق تُنشر في مستودعات أخرى، فنستخدم رابطاً كاملاً
+const OMNIS_BASE = "https://0-bilal.github.io/QB-OMNIS/";
+const SDK = "https://www.gstatic.com/firebasejs/10.14.1/";
+
+/**
+ * عدّاد زيارات صفحة الإغلاق: زيارة واحدة لكل جلسة (نفس مفتاح sessionStorage في lock.js).
+ * كل شيء داخل try/catch حتى لا يؤثر على الصفحة إطلاقاً.
+ */
+function visitCounter(site) {
+  if (!site) return "";
+  const s = JSON.stringify(String(site)).replace(/</g, "\\u003c");
+  return `<script type="module">
+const site = ${s}, key = "qb-omnis:visit:" + site + ":closed";
+let claimed = false;
+try {
+  if (!navigator.webdriver && !sessionStorage.getItem(key)) { sessionStorage.setItem(key, "1"); claimed = true; }
+} catch {}
+if (claimed) {
+  try {
+    const [{ initializeApp }, { getFirestore, doc, setDoc, increment }, { firebaseConfig }] = await Promise.all([
+      import("${SDK}firebase-app.js"),
+      import("${SDK}firebase-firestore.js"),
+      import("${OMNIS_BASE}firebase-config.js"),
+    ]);
+    const db = getFirestore(initializeApp(firebaseConfig, "qb-omnis-visits"));
+    const day = new Date().toISOString().slice(0, 10);
+    await setDoc(doc(db, "stats", site, "days", day), { closed: increment(1) }, { merge: true });
+  } catch { try { sessionStorage.removeItem(key); } catch {} }
+}
+</script>`;
+}
+
 const ICON = {
   lock: '<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
   globe: '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
@@ -42,8 +74,10 @@ const ICON = {
  * @param {Date|string} [o.closedAt] تاريخ الإغلاق
  * @param {string} [o.headline]   العنوان الكبير حسب سبب الإغلاق
  * @param {string} [o.returnAt]   موعد العودة المتوقع (للصيانة)
+ * @param {string} [o.site]       اسم المستودع: يضيف عدّاد الزيارات (closed) للصفحة المنشورة.
+ *                                lock.js لا يمرّره لأنه يعدّ الزيارة بنفسه.
  */
-export function maintenancePage({ title = "", message = "", serviceName = "", closedAt = null, headline = "", returnAt = "" } = {}) {
+export function maintenancePage({ title = "", message = "", serviceName = "", closedAt = null, headline = "", returnAt = "", site = "" } = {}) {
   const service = esc(serviceName || title);
   const msg = esc(message).replace(/\n/g, "<br>");
   const date = esc(formatDate(closedAt));
@@ -58,6 +92,7 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
 <meta name="theme-color" content="#0d1117">
 <title>${head}${service ? " · " + service : ""}</title>
 <link rel="icon" href="${FAVICON}">
+${visitCounter(site)}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet">

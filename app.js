@@ -4,13 +4,13 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
-  query, orderBy, limit, serverTimestamp,
+  query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=4";
-import { maintenancePage } from "./maintenance-template.js?v=4";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=5";
+import { maintenancePage } from "./maintenance-template.js?v=5";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "4";
+const APP_VERSION = "5";
 
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
@@ -77,7 +77,8 @@ const $q = document.getElementById("q");
 let auth, db, currentUser = null;
 let sites = [];              // [{ repo, pages, record }]
 const busy = new Map();      // اسم المستودع ← { label, step, total, text }
-let visits = {};             // اسم المستودع ← مستند العدّاد { total, d<يوم>: عدد }
+let visits = {};             // اسم المستودع ← { days, last30, prev30, total } أو { error }
+let legacyVisits = {};       // العدّاد القديم visits/{site} = { total, d<يوم>: عدد } (زيارات تشغيل فقط)
 let visitsAvailable = false;
 let logEntries = [];
 let config = { categories: DEFAULT_CATEGORIES, templates: [] };
@@ -371,7 +372,7 @@ function originalConfig(pages) {
 
 /** ينشئ/يحدّث فرع maintenance ليحتوي صفحة الإغلاق فقط (فرع مستقل بلا تاريخ). */
 async function writeMaintenanceBranch(owner, name, message, page = {}) {
-  const html = maintenancePage({ title: name, message, ...page });
+  const html = maintenancePage({ title: name, message, ...page, site: name }); // site: عدّاد زيارات الإغلاق
   const files = [["index.html", html], ["404.html", html], [".nojekyll", "\n"]];
   const tree = await gh(`/repos/${owner}/${name}/git/trees`, {
     method: "POST",
@@ -511,8 +512,7 @@ async function loadExtras() {
     getDocs(query(collection(db, "log"), orderBy("at", "desc"), limit(50))),
     getDoc(doc(db, "meta", "config")),
   ]);
-  visitsAvailable = vSnap.status === "fulfilled";
-  visits = visitsAvailable ? Object.fromEntries(vSnap.value.docs.map((d) => [d.id, d.data()])) : {};
+  legacyVisits = vSnap.status === "fulfilled" ? Object.fromEntries(vSnap.value.docs.map((d) => [d.id, d.data()])) : {};
   logEntries = lSnap.status === "fulfilled" ? lSnap.value.docs.map((d) => d.data()) : [];
   if (cSnap.status === "fulfilled" && cSnap.value.exists()) {
     const c = cSnap.value.data();
@@ -521,6 +521,38 @@ async function loadExtras() {
       templates: Array.isArray(c.templates) ? c.templates : [],
     };
   }
+}
+
+// ───── الزيارات: stats/{site}/days/{YYYY-MM-DD} = { open, closed } بتوقيت UTC ─────
+// القراءة لكل موقع مربوط: آخر 14 مستنداً يومياً + 3 استعلامات تجميع (sum) ≈ 17 قراءة كحد أقصى.
+
+const dayKey = (ago = 0) => new Date(Date.now() - ago * DAY_MS).toISOString().slice(0, 10);
+const num = (x) => Number(x) || 0;
+
+async function loadSiteVisits(name) {
+  const days = collection(db, "stats", name, "days");
+  const range = (from, to) => query(days,
+    ...(from ? [where(documentId(), ">=", from)] : []),
+    ...(to ? [where(documentId(), "<=", to)] : []));
+  const agg = (q) => getAggregateFromServer(q, { open: sum("open"), closed: sum("closed") })
+    .then((r) => ({ open: num(r.data().open), closed: num(r.data().closed) }));
+  const [recent, last30, prev30, total] = await Promise.all([
+    getDocs(range(dayKey(13))), agg(range(dayKey(29))), agg(range(dayKey(59), dayKey(30))), agg(days),
+  ]);
+  const byDay = Object.fromEntries(recent.docs.map((d) => [d.id, { open: num(d.data().open), closed: num(d.data().closed) }]));
+  return { days: byDay, last30, prev30, total };
+}
+
+async function loadVisits(names) {
+  const results = await Promise.allSettled(names.map(loadSiteVisits));
+  visits = {};
+  let failed = 0;
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") visits[names[i]] = r.value;
+    else { failed++; visits[names[i]] = { error: true }; }
+  });
+  // إن فشلت كل المواقع فغالباً قواعد Firestore الجديدة لم تُنشر بعد
+  visitsAvailable = !names.length || failed < names.length;
 }
 
 // ───────────────────────── العمليات ─────────────────────────
@@ -607,12 +639,15 @@ async function loadSites() {
     const withPages = repos.filter((r) => r.has_pages && r.name !== DASHBOARD_REPO);
     const [snap] = await Promise.all([getDocs(collection(db, "sites")), loadExtras()]);
     const records = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
+    const linked = withPages.map((r) => r.name).filter((n) => records[n]?.owner);
+    const visitsLoaded = loadVisits(linked).catch(() => { visitsAvailable = false; });
     sites = await Promise.all(withPages.map(async (repo) => {
       let pages = null;
       try { pages = await gh(`/repos/${repo.owner.login}/${repo.name}/pages`); }
       catch (e) { if (e.status !== 404) throw e; }
       return { repo, pages, record: records[repo.name] || null };
     }));
+    await visitsLoaded;
     sites = sites.filter((s) => s.pages);
     ui.loadedAt = new Date();
     renderSites();
@@ -655,15 +690,67 @@ function categoryOf(s) {
 }
 
 const today = () => Math.floor(Date.now() / DAY_MS);
+/**
+ * إحصاءات موقع واحد: { today, week, total } كل منها { open, closed, all }،
+ * و last30 / prev30 / bars (14 يوماً) للمجموع. يُدمج العدّاد القديم (visits/{site}) كزيارات تشغيل.
+ * يرجع null إن لم تُسجَّل أي زيارة بعد.
+ */
 function visitStats(name) {
   const v = visits[name];
-  if (!v) return null;
+  const old = legacyVisits[name];
+  if ((!v || v.error) && !old) return null;
   const t = today();
-  const day = (i) => Number(v[`d${t - i}`] || 0);
-  let last30 = 0, prev30 = 0;
-  for (let i = 0; i < 30; i++) { last30 += day(i); prev30 += day(i + 30); }
-  const bars = Array.from({ length: 14 }, (_, k) => day(13 - k));
-  return { total: Number(v.total || 0), last30, prev30, today: day(0), bars };
+  const oldDay = (i) => num(old?.[`d${t - i}`]);
+  const newDay = (i) => v?.days?.[dayKey(i)] || { open: 0, closed: 0 };
+  const day = (i) => { const d = newDay(i); return { open: d.open + oldDay(i), closed: d.closed }; };
+  const pack = (open, closed) => ({ open, closed, all: open + closed });
+  const span = (n) => {
+    let open = 0, closed = 0;
+    for (let i = 0; i < n; i++) { const d = day(i); open += d.open; closed += d.closed; }
+    return pack(open, closed);
+  };
+  let old30 = 0, oldPrev = 0;
+  for (let i = 0; i < 30; i++) { old30 += oldDay(i); oldPrev += oldDay(i + 30); }
+  const total = pack(num(v?.total?.open) + num(old?.total), num(v?.total?.closed));
+  if (!total.all) return null;
+  const d0 = day(0);
+  return {
+    today: pack(d0.open, d0.closed),
+    week: span(7),
+    total,
+    last30: num(v?.last30?.open) + num(v?.last30?.closed) + old30,
+    prev30: num(v?.prev30?.open) + num(v?.prev30?.closed) + oldPrev,
+    bars: Array.from({ length: 14 }, (_, k) => { const d = day(13 - k); return d.open + d.closed; }),
+  };
+}
+
+/** جدول صغير: زيارات التشغيل والإغلاق لليوم و7 أيام والإجمالي */
+function visitTable(s, stats) {
+  if (!isLinked(s)) return "";
+  if (visits[s.repo.name]?.error && !stats) {
+    return `<p class="v-note">${icon("alert", "sm")}تعذّر جلب الزيارات. انشر قواعد Firestore الجديدة.</p>`;
+  }
+  const hint = s.record?.instant ? "" : `<p class="v-note">${icon("zap", "sm")}زيارات التشغيل تحتاج تفعيل الإغلاق الفوري</p>`;
+  if (!stats) return `<p class="v-note">${icon("chart", "sm")}لا توجد زيارات مسجّلة بعد</p>${hint}`;
+  const row = (label, cls, k) => `
+    <span class="vk"><i class="dot ${cls}"></i>${label}</span>
+    <b>${fmt(stats.today[k])}</b><b>${fmt(stats.week[k])}</b><b>${fmt(stats.total[k])}</b>`;
+  return `
+    <div class="vtable" role="group" aria-label="الزيارات حسب حالة الموقع">
+      <span></span><span class="vh">اليوم</span><span class="vh">7 أيام</span><span class="vh">الإجمالي</span>
+      ${row("مفتوح", "on", "open")}
+      ${row("مغلق", "off", "closed")}
+    </div>${hint}`;
+}
+
+function visitSummary(stats) {
+  if (!stats) return "لا توجد زيارات بعد";
+  return `اليوم ${fmt(stats.today.all)} · 7 أيام ${fmt(stats.week.all)} · الإجمالي ${fmt(stats.total.all)}`;
+}
+function visitTitle(stats) {
+  if (!stats) return "";
+  const f = (k) => `مفتوح ${fmt(stats[k].open)} / مغلق ${fmt(stats[k].closed)}`;
+  return `اليوم: ${f("today")}\n7 أيام: ${f("week")}\nالإجمالي: ${f("total")}`;
 }
 
 const serviceOf = (s) => s.record?.serviceName || s.repo.name;
@@ -779,9 +866,7 @@ function siteCard(s) {
     note = `<div class="site-note">${icon("lock", "sm")}<span><b>${esc(label)}</b>${when ? ` · ${esc(when)}` : ""}${ret}</span></div>`;
   }
 
-  const visitsSub = stats
-    ? `اليوم: ${fmt(stats.today)}`
-    : s.record?.instant ? "لا توجد زيارات بعد" : "فعّل الإغلاق الفوري للعدّ";
+  const visitsSub = stats ? `اليوم: ${fmt(stats.today.all)}` : "لا توجد زيارات بعد";
 
   return `
     <article class="site" data-site="${esc(name)}">
@@ -808,6 +893,7 @@ function siteCard(s) {
           </div>
           <div style="${toneStyle(cat.tone)}">${sparkHTML(s, stats)}</div>
         </div>
+        ${visitTable(s, stats)}
       </div>
       ${note}
       <div class="site-foot">${siteActions(s)}</div>
@@ -822,7 +908,7 @@ function siteRow(s) {
       <span class="tile sm" style="${toneStyle(cat.tone)}">${esc(letterOf(s))}</span>
       <div class="row-main">
         <b>${esc(serviceOf(s))}</b>
-        <span>${esc(cat.label)} · ${stats ? `${fmt(stats.last30)} زيارة` : "لا توجد بيانات زيارات"} · <span dir="ltr">${esc(s.repo.name)}</span></span>
+        <span>${esc(cat.label)} · <span title="${esc(visitTitle(stats))}">${isLinked(s) ? visitSummary(stats) : "لا توجد بيانات زيارات"}</span> · <span dir="ltr">${esc(s.repo.name)}</span></span>
       </div>
       ${pillFor(s)}
       <div class="row-actions">${siteActions(s, { compact: true })}</div>
@@ -1006,8 +1092,8 @@ function renderSidebar() {
     <section class="ink-card">
       <b>${icon("zap")}الإغلاق الفوري</b>
       <p>${c.instant
-        ? `مفعّل على ${c.instant} من ${c.all} مواقع. تظهر صفحة الإغلاق للزائر خلال ثوانٍ، وتُعدّ زياراتها.`
-        : "غير مفعّل على أي موقع. فعّله من خيارات الموقع لتظهر صفحة الإغلاق خلال ثوانٍ وتُعدّ الزيارات."}</p>
+        ? `مفعّل على ${c.instant} من ${c.all} مواقع. تظهر صفحة الإغلاق للزائر خلال ثوانٍ، وتُعدّ زيارات التشغيل.`
+        : "غير مفعّل على أي موقع. فعّله من خيارات الموقع لتظهر صفحة الإغلاق خلال ثوانٍ وتُعدّ زيارات التشغيل."}</p>
     </section>`;
 }
 
@@ -1045,8 +1131,8 @@ function renderStats() {
   const pctOn = c.all ? (c.on / c.all) * 100 : 0;
   const visitFoot = !visitsAvailable
     ? `<span class="foot">حدّث قواعد Firestore لعرض الزيارات</span>`
-    : !any ? `<span class="foot">تُعدّ زيارات المواقع ذات الإغلاق الفوري</span>`
-    : trend == null ? `<span class="foot">${fmt(c.instant)} مواقع يُعدّ زوارها</span>`
+    : !any ? `<span class="foot">لا توجد زيارات مسجّلة بعد</span>`
+    : trend == null ? `<span class="foot">مفتوح ومغلق معاً</span>`
     : `<span class="foot ${trend >= 0 ? "up" : "down"}">${trend >= 0 ? "▲" : "▼"} ${Math.abs(trend)}% عن الشهر السابق</span>`;
 
   document.getElementById("stats").innerHTML = [
@@ -1189,7 +1275,7 @@ function renderSettingsView() {
         <span class="dlg-icon" style="${toneStyle(visitsAvailable ? "success" : "warn")};width:34px;height:34px;border-radius:9px">${icon("chart")}</span>
         <div class="grow"><b>عدّاد الزيارات</b>
           <p>${visitsAvailable
-            ? "يعمل. يُعدّ زائر واحد لكل جلسة تصفح في المواقع المفعّل عليها الإغلاق الفوري."
+            ? "يعمل. زيارة واحدة لكل جلسة تصفح: زيارات التشغيل في المواقع المفعّل عليها الإغلاق الفوري، وزيارات صفحة الإغلاق في كل المواقع المغلقة."
             : "غير متاح: انسخ محتوى firestore.rules الجديد إلى Firebase ← Firestore ← Rules ثم اضغط Publish."}</p></div>
       </div>
       <div class="list-item">
@@ -1525,14 +1611,14 @@ async function runAction(act, s, opts = {}) {
 
   if (act === "instant-on" && !(await confirmDialog({
     iconName: "zap", tone: "warn", title: `تفعيل الإغلاق الفوري على «${esc(service)}»؟`,
-    text: "تظهر صفحة الإغلاق للزوار خلال ثوانٍ، وتبدأ اللوحة بعدّ الزيارات.",
+    text: "تظهر صفحة الإغلاق للزوار خلال ثوانٍ، وتبدأ اللوحة بعدّ زيارات التشغيل.",
     body: `<div class="options"><div class="info">${icon("info")}<span>سيُضاف سطر واحد إلى ملفات HTML في المستودع (commit جديد).
       إذا كانت لديك نسخة على جهازك، اسحب التحديث (<code>git pull</code>) قبل أن تعدّل عليها.</span></div></div>`,
     confirmLabel: "تفعيل",
   }))) return;
   if (act === "instant-off" && !(await confirmDialog({
     iconName: "zap", tone: "neutral", title: `إزالة الإغلاق الفوري من «${esc(service)}»؟`,
-    text: "سيُحذف السطر من ملفات HTML (commit جديد)، ويتوقف عدّ الزيارات.", confirmLabel: "إزالة", confirmClass: "danger",
+    text: "سيُحذف السطر من ملفات HTML (commit جديد)، ويتوقف عدّ زيارات التشغيل.", confirmLabel: "إزالة", confirmClass: "danger",
   }))) return;
   if (act === "unlink" && !(await confirmDialog({
     iconName: "unlink", tone: "danger", title: `فك ربط «${esc(service)}»؟`,

@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isAdmin() {
-      return request.auth != null && request.auth.uid == "YOUR_ADMIN_UID";
+      return request.auth != null && request.auth.uid == "KZFk5qzmPHXrn046WGfkcmgSygy2";
     }
 
     // حالة كل موقع: القراءة للجميع (يحتاجها سكربت الإغلاق الفوري)، والكتابة لك فقط
@@ -26,6 +26,27 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["total", dayKey()])
         && request.resource.data.total == resource.data.total + 1
         && request.resource.data[dayKey()] == resource.data.get(dayKey(), 0) + 1;
+    }
+
+    // إحصاءات الزيارات اليومية (UTC): stats/{site}/days/{YYYY-MM-DD} = { open, closed }
+    // القراءة للمالك فقط. الزائر يزيد حقلاً واحداً بمقدار 1 بالضبط، لموقع مسجّل فقط. لا حذف.
+    match /stats/{site}/days/{day} {
+      function validDay() { return day.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+      function siteExists() { return exists(/databases/$(database)/documents/sites/$(site)); }
+      function onlyCounters() { return request.resource.data.keys().hasOnly(["open", "closed"]); }
+      function bumped(f) {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly([f])
+          && request.resource.data[f] == resource.data.get(f, 0) + 1;
+      }
+
+      allow read: if isAdmin();
+      allow create: if validDay() && siteExists() && onlyCounters()
+        && request.resource.data.keys().size() == 1
+        && (request.resource.data.get("open", 0) == 1 || request.resource.data.get("closed", 0) == 1);
+      allow update: if validDay() && siteExists() && onlyCounters()
+        && request.resource.data.diff(resource.data).affectedKeys().size() == 1
+        && (bumped("open") || bumped("closed"));
+      allow delete: if false;
     }
 
     // سجل العمليات والإعدادات (التصنيفات والرسائل الجاهزة): للمالك فقط

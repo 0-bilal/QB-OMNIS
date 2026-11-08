@@ -329,6 +329,17 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .spark.off span { background: var(--bar-off); }
 .spark.idle span { background: var(--bar-idle); }
 
+/* جدول الزيارات: مفتوح / مغلق × اليوم / 7 أيام / الإجمالي */
+.vtable {
+  display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); gap: 4px 12px; align-items: center;
+  margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface-3); font-size: 12px;
+}
+.vtable .vh { color: var(--muted); text-align: center; }
+.vtable .vk { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); white-space: nowrap; }
+.vtable b { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.v-note { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.v-note .icon { width: 13px; height: 13px; flex: none; }
+
 .site-note {
   margin: 0 16px 12px; padding: 10px 12px; border-radius: var(--radius); font-size: 13px;
   display: flex; gap: 8px; align-items: flex-start; background: var(--danger-softer); color: var(--danger-ink);
