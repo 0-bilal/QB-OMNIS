@@ -3,14 +3,16 @@
 //
 // 1) عند إغلاق الموقع من اللوحة، يعرض صفحة الإغلاق فوراً لكل من يتصفح الموقع الآن،
 //    إلى أن يكتمل الإغلاق الحقيقي من GitHub Pages خلال دقيقة أو دقيقتين.
+//    وعند فتحه من جديد، تعود الصفحة تلقائياً بلا Ctrl+Shift+R (refresh.js).
 // 2) يعدّ زيارة واحدة لكل جلسة تصفح، مفتوحاً (open) أو مغلقاً (closed)،
 //    في المستند اليومي stats/{site}/days/{YYYY-MM-DD} (بتوقيت UTC).
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getFirestore, doc, onSnapshot, setDoc, increment,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=7";
-import { maintenancePage } from "./maintenance-template.js?v=7";
+import { firebaseConfig } from "./firebase-config.js?v=8";
+import { maintenancePage } from "./maintenance-template.js?v=8";
+import { reloadWhenOpen } from "./refresh.js?v=8";
 
 const param = new URL(import.meta.url).searchParams.get("site");
 const site = param || location.pathname.split("/").filter(Boolean)[0] || location.hostname;
@@ -63,7 +65,8 @@ try {
           }));
           document.close();
         } else if (shown && data && data.enabled !== false) {
-          location.reload();
+          // فُتح الموقع: ننتظر حتى ينشر GitHub الموقع الأصلي ثم نعيد التحميل متجاوزين النسخة المحفوظة
+          reloadWhenOpen();
         }
       } catch { /* لا نكسر الموقع أبداً */ }
     }, () => { /* عند فشل الاتصال يبقى الموقع كما هو */ });

@@ -6,11 +6,11 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=7";
-import { maintenancePage } from "./maintenance-template.js?v=7";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=8";
+import { maintenancePage } from "./maintenance-template.js?v=8";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "7";
+const APP_VERSION = "8";
 
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
@@ -1689,7 +1689,7 @@ async function runAction(act, s, opts = {}) {
       const note = await unlockSite(s, opts, onStep);
       const orig = s.record?.original;
       addLog({ type: "open", site: name, title: `فتح ${service}`, detail: orig ? `عاد النشر إلى ${describeSource(orig)}` : "عاد الموقع للعمل" });
-      toast({ kind: "opened", title: `تم فتح «${service}»`, text: `${orig ? `عاد النشر إلى ${describeSource(orig)}. ` : ""}سيظهر الموقع للزوار خلال دقيقة أو دقيقتين.` });
+      toast({ kind: "opened", title: `تم فتح «${service}»`, text: `${orig ? `عاد النشر إلى ${describeSource(orig)}. ` : ""}يعود للزوار خلال دقيقة أو دقيقتين، وتتحدث صفحاتهم تلقائياً.` });
       if (note) toast({ kind: "warn", title: "الموقع مفتوح، لكن إعادة النشر تحتاج تدخلك", text: note,
         actions: [{ label: "فتح Actions", onClick: () => window.open(`${s.repo.html_url}/actions`, "_blank", "noopener") }] });
     } else if (act === "instant-on" || act === "instant-off") {

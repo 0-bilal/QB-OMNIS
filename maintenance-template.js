@@ -28,32 +28,41 @@ const FAVICON = "data:image/svg+xml," + encodeURIComponent(
 // رابط اللوحة على GitHub Pages: صفحة الإغلاق تُنشر في مستودعات أخرى، فنستخدم رابطاً كاملاً
 const OMNIS_BASE = "https://0-bilal.github.io/QB-OMNIS/";
 const SDK = "https://www.gstatic.com/firebasejs/10.14.1/";
+const REFRESH_V = "8"; // نفس رقم الإصدار في lock.js وapp.js
 
 /**
- * عدّاد زيارات صفحة الإغلاق: زيارة واحدة لكل جلسة (نفس مفتاح sessionStorage في lock.js).
+ * سكربت صفحة الإغلاق المنشورة:
+ * 1) يتابع حالة الموقع، وعند فتحه يعيد الصفحة تلقائياً متجاوزاً النسخة المحفوظة (بلا Ctrl+Shift+R).
+ * 2) يعدّ زيارة closed واحدة لكل جلسة (نفس مفتاح sessionStorage في lock.js).
  * كل شيء داخل try/catch حتى لا يؤثر على الصفحة إطلاقاً.
  */
-function visitCounter(site) {
+function pageScript(site) {
   if (!site) return "";
   const s = JSON.stringify(String(site)).replace(/</g, "\\u003c");
   return `<script type="module">
 const site = ${s}, key = "qb-omnis:visit:" + site + ":closed";
 let claimed = false;
+const release = () => { try { sessionStorage.removeItem(key); } catch {} };
 try {
   if (!navigator.webdriver && !sessionStorage.getItem(key)) { sessionStorage.setItem(key, "1"); claimed = true; }
 } catch {}
-if (claimed) {
-  try {
-    const [{ initializeApp }, { getFirestore, doc, setDoc, increment }, { firebaseConfig }] = await Promise.all([
-      import("${SDK}firebase-app.js"),
-      import("${SDK}firebase-firestore.js"),
-      import("${OMNIS_BASE}firebase-config.js"),
-    ]);
-    const db = getFirestore(initializeApp(firebaseConfig, "qb-omnis-visits"));
+try {
+  const [{ initializeApp }, { getFirestore, doc, setDoc, increment, onSnapshot }, { firebaseConfig }, { reloadWhenOpen }] = await Promise.all([
+    import("${SDK}firebase-app.js"),
+    import("${SDK}firebase-firestore.js"),
+    import("${OMNIS_BASE}firebase-config.js"),
+    import("${OMNIS_BASE}refresh.js?v=${REFRESH_V}"),
+  ]);
+  const db = getFirestore(initializeApp(firebaseConfig, "qb-omnis-visits"));
+  onSnapshot(doc(db, "sites", site), (snap) => {
+    const d = snap.data();
+    if (d && d.enabled !== false) reloadWhenOpen();
+  }, () => {});
+  if (claimed) {
     const day = new Date().toISOString().slice(0, 10);
-    await setDoc(doc(db, "stats", site, "days", day), { closed: increment(1) }, { merge: true });
-  } catch { try { sessionStorage.removeItem(key); } catch {} }
-}
+    setDoc(doc(db, "stats", site, "days", day), { closed: increment(1) }, { merge: true }).catch(release);
+  }
+} catch { if (claimed) release(); }
 </script>`;
 }
 
@@ -91,8 +100,9 @@ export function maintenancePage({ title = "", message = "", serviceName = "", cl
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0d1117">
 <title>${head}${service ? " · " + service : ""}</title>
+<meta name="qb-omnis" content="maintenance">
 <link rel="icon" href="${FAVICON}">
-${visitCounter(site)}
+${pageScript(site)}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet">
