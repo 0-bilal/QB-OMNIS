@@ -6,11 +6,11 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=5";
-import { maintenancePage } from "./maintenance-template.js?v=5";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=6";
+import { maintenancePage } from "./maintenance-template.js?v=6";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "5";
+const APP_VERSION = "6";
 
 const MAINT_BRANCH = "maintenance";
 const TOKEN_KEY = "qb-omnis.github-token";
@@ -1177,6 +1177,7 @@ function renderSitesView() {
       <div class="page-head">
         <div><h1 id="page-title"></h1><p>تحكّم في تشغيل وإغلاق مواقعك، وتابع زياراتها من مكان واحد.</p></div>
         <div class="row"><span class="sync"><span class="dot"></span><span id="updated"></span></span>
+          <button class="btn" id="republish-all" hidden title="إعادة نشر صفحة الإغلاق لكل المواقع المغلقة بآخر نسخة من القالب">${icon("lock")}<span></span></button>
           <button class="btn" id="reload">${icon("refresh")}تحديث</button></div>
       </div>
       <div class="stats" id="stats"></div>
@@ -1205,6 +1206,7 @@ function renderSitesView() {
       </section>
       <div class="footer">QB-OMNIS · ${sites.length} موقع · الإصدار ${APP_VERSION}</div>`;
     document.getElementById("reload").onclick = loadSites;
+    document.getElementById("republish-all").onclick = republishAll;
     const $sort = document.getElementById("sort");
     $sort.value = ui.sort;
     $sort.onchange = () => { ui.sort = $sort.value; try { localStorage.setItem(SORT_KEY, ui.sort); } catch {} renderList(); };
@@ -1212,6 +1214,11 @@ function renderSitesView() {
   const cat = ui.cat === "all" ? null : ui.cat === "none" ? "بلا تصنيف" : config.categories.find((x) => x.id === ui.cat)?.label;
   document.getElementById("page-title").textContent = cat ? `مواقعي · ${cat}` : "مواقعي";
   document.getElementById("updated").textContent = ui.loadedAt ? `آخر مزامنة ${since(ui.loadedAt)}` : "";
+  const $rep = document.getElementById("republish-all");
+  const nLocked = lockedLinked().length;
+  $rep.hidden = !nLocked;
+  $rep.disabled = lockedLinked().some((x) => busy.has(x.repo.name));
+  $rep.querySelector("span").textContent = `تحديث صفحات الإغلاق (${nLocked})`;
   renderStats();
   renderTabs();
   renderList();
@@ -1696,6 +1703,65 @@ async function runAction(act, s, opts = {}) {
     busy.delete(name);
     await refreshOne(name).catch(() => {});
     if (document.getElementById("dash")) renderSites();
+  }
+}
+
+// ───── تحديث كل صفحات الإغلاق دفعة واحدة ─────
+// يعيد نشر صفحة الإغلاق لكل موقع مغلق بنفس رسالته وسببه وتاريخه، حتى تحصل كل الصفحات
+// على آخر نسخة من القالب (مثل عدّاد زيارات الإغلاق). لا يغيّر Firestore ولا مصدر النشر.
+
+const lockedLinked = () => sites.filter((s) => isLinked(s) && isLocked(s));
+
+async function republishAll() {
+  const targets = lockedLinked().filter((s) => !busy.has(s.repo.name));
+  if (!targets.length) { toast({ kind: "info", title: "لا توجد مواقع مغلقة لتحديثها" }); return; }
+  if (!(await confirmDialog({
+    iconName: "refresh", tone: "accent", title: `تحديث صفحات الإغلاق (${targets.length})؟`,
+    text: "تُعاد كتابة صفحة الإغلاق في كل موقع مغلق بنفس الرسالة والسبب والتاريخ، فتحصل على آخر نسخة من القالب وعدّاد الزيارات.",
+    body: `<div class="options"><div class="info">${icon("info")}<span>commit واحد في فرع <code>maintenance</code> لكل موقع.
+      لا يتغير شيء آخر، والمواقع تبقى مغلقة. تظهر النسخة الجديدة خلال دقيقة أو دقيقتين.</span></div></div>`,
+    confirmLabel: "تحديث الكل",
+  }))) return;
+
+  targets.forEach((s) => busy.set(s.repo.name, { label: "بانتظار التحديث…", step: 0, total: 0, text: "في قائمة الانتظار" }));
+  renderSites();
+  const progress = toast({ kind: "progress", title: "تحديث صفحات الإغلاق…", text: `0 من ${targets.length}` });
+  const failed = [];
+  // واحداً تلو الآخر حتى لا نصطدم بحدود GitHub API
+  for (let i = 0; i < targets.length; i++) {
+    const s = targets[i];
+    const name = s.repo.name, r = s.record || {};
+    busy.set(name, { label: "جارٍ التحديث…", step: 1, total: 1, text: "كتابة صفحة الإغلاق" });
+    renderSites();
+    progress.update({ text: `${i + 1} من ${targets.length}: ${serviceOf(s)}`, step: i + 1, total: targets.length });
+    try {
+      await writeMaintenanceBranch(s.repo.owner.login, name, r.message || DEFAULT_MESSAGE, {
+        serviceName: r.serviceName || "",
+        closedAt: r.lockedAt?.toDate?.() || null,
+        headline: r.headline || (r.reason ? reasonOf(r.reason).headline : ""),
+        returnAt: r.reason === "maintenance" ? (r.returnAt || "") : "",
+      });
+      await requestPagesBuild(s.repo.owner.login, name);
+    } catch (e) {
+      failed.push({ s, message: e.message, status: e.status });
+    } finally {
+      busy.delete(name);
+    }
+  }
+  progress.close();
+  renderSites();
+
+  const done = targets.length - failed.length;
+  if (done) addLog({ type: "update", site: "", title: "تحديث كل صفحات الإغلاق", detail: `${done} من ${targets.length} موقع` });
+  if (!failed.length) {
+    toast({ kind: "updated", title: `تم تحديث ${done} صفحة إغلاق`, text: "تظهر النسخة الجديدة للزوار خلال دقيقة أو دقيقتين." });
+  } else {
+    const perm = failed.some((f) => f.status === 401 || f.status === 403 || f.status === 404);
+    toast({
+      kind: "error", title: `تعذّر تحديث ${failed.length} من ${targets.length}`,
+      text: `${failed.map((f) => `${serviceOf(f.s)}: ${f.message}`).join(" · ")}${perm ? " — تأكد من صلاحيات مفتاح GitHub (Contents وPages)." : ""}`,
+      actions: [{ label: "إعادة المحاولة", onClick: republishAll }],
+    });
   }
 }
 

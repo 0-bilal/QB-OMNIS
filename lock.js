@@ -9,8 +9,8 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import {
   getFirestore, doc, onSnapshot, setDoc, increment,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=5";
-import { maintenancePage } from "./maintenance-template.js?v=5";
+import { firebaseConfig } from "./firebase-config.js?v=6";
+import { maintenancePage } from "./maintenance-template.js?v=6";
 
 const param = new URL(import.meta.url).searchParams.get("site");
 const site = param || location.pathname.split("/").filter(Boolean)[0] || location.hostname;
