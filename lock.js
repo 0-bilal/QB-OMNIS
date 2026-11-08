@@ -22,7 +22,12 @@ if (site && !String(firebaseConfig.apiKey).startsWith("YOUR_")) {
     if (data && data.enabled === false && !shown) {
       shown = true;
       document.open();
-      document.write(maintenancePage({ title: site, message: data.message || "" }));
+      document.write(maintenancePage({
+        title: site,
+        message: data.message || "",
+        serviceName: data.serviceName || "",
+        closedAt: data.lockedAt?.toDate?.() || null,
+      }));
       document.close();
     } else if (shown && data && data.enabled !== false) {
       location.reload();

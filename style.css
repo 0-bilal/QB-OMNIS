@@ -321,6 +321,8 @@ details.msg summary::-webkit-details-marker { display: none; }
 details.msg summary:hover { color: var(--accent); }
 details.msg[open] summary { margin-bottom: 8px; }
 details.msg textarea { font-size: 13px; }
+details.msg label { font-size: 12px; font-weight: 600; color: var(--fg-muted); margin: 8px 0 4px; }
+details.msg input { font-size: 13px; }
 
 .working { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 12px; }
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .7s linear infinite; }

@@ -93,8 +93,8 @@ function originalConfig(pages) {
 }
 
 /** ينشئ/يحدّث فرع maintenance ليحتوي صفحة الإغلاق فقط (فرع مستقل بلا تاريخ). */
-async function writeMaintenanceBranch(owner, name, message) {
-  const html = maintenancePage({ title: name, message });
+async function writeMaintenanceBranch(owner, name, message, { serviceName = "", closedAt = null } = {}) {
+  const html = maintenancePage({ title: name, message, serviceName, closedAt });
   const files = [["index.html", html], ["404.html", html], [".nojekyll", "\n"]];
   const tree = await gh(`/repos/${owner}/${name}/git/trees`, {
     method: "POST",
@@ -224,7 +224,7 @@ const saveRecord = (name, data) => setDoc(doc(db, "sites", name), data, { merge:
 
 async function linkSite(s) {
   const owner = s.repo.owner.login, name = s.repo.name;
-  await writeMaintenanceBranch(owner, name, DEFAULT_MESSAGE);
+  await writeMaintenanceBranch(owner, name, DEFAULT_MESSAGE, { serviceName: s.record?.serviceName || "" });
   await saveRecord(name, {
     owner, repo: name,
     enabled: !isLocked(s),
@@ -234,18 +234,20 @@ async function linkSite(s) {
   });
 }
 
-async function lockSite(s, message) {
+async function lockSite(s, message, serviceName = "") {
   const owner = s.repo.owner.login, name = s.repo.name;
   const alreadyLocked = isLocked(s);
+  // تاريخ الإغلاق: يبقى تاريخ أول إغلاق عند تحديث الرسالة فقط
+  const closedAt = (alreadyLocked && s.record?.lockedAt?.toDate?.()) || new Date();
   // 1) Firestore أولاً: يُغلق الموقع فوراً عند الزوار (إن كان الإغلاق الفوري مفعّلاً)،
   //    ونحفظ الإعداد الأصلي قبل تغييره حتى نستطيع استرجاعه دائماً
   await saveRecord(name, {
-    enabled: false, message, owner, repo: name, lockedAt: serverTimestamp(),
-    ...(alreadyLocked ? {} : { original: originalConfig(s.pages) }),
+    enabled: false, message, serviceName, owner, repo: name,
+    ...(alreadyLocked ? {} : { original: originalConfig(s.pages), lockedAt: serverTimestamp() }),
   });
   // 2) الإغلاق الحقيقي على GitHub Pages
   try {
-    await writeMaintenanceBranch(owner, name, message);
+    await writeMaintenanceBranch(owner, name, message, { serviceName, closedAt });
     if (!alreadyLocked) {
       await gh(`/repos/${owner}/${name}/pages`, {
         method: "PUT", body: { build_type: "legacy", source: { branch: MAINT_BRANCH, path: "/" } },
@@ -326,6 +328,7 @@ const ui = {
   loadedAt: null,
 };
 const drafts = new Map(); // نصوص رسائل الإغلاق أثناء الكتابة، حتى لا تضيع عند إعادة الرسم
+const svcDrafts = new Map(); // أسماء الخدمات أثناء الكتابة
 
 // أيقونات SVG خفيفة بنمط خطّي
 const ICONS = {
@@ -523,6 +526,7 @@ function siteParts(s) {
   const working = busy.has(name);
   const url = s.pages?.html_url;
   const message = drafts.get(name) ?? s.record?.message ?? DEFAULT_MESSAGE;
+  const serviceName = svcDrafts.get(name) ?? s.record?.serviceName ?? "";
   const dis = working ? "disabled" : "";
   const n = esc(name);
 
@@ -532,7 +536,7 @@ function siteParts(s) {
   } else if (locked) {
     actions = `
       <button class="success btn-sm" data-act="unlock" data-name="${n}" ${dis}>${icon("power")} تشغيل الموقع</button>
-      <button class="btn-sm" data-act="update" data-name="${n}" ${dis}>${icon("edit")} تحديث الرسالة</button>`;
+      <button class="btn-sm" data-act="update" data-name="${n}" ${dis}>${icon("edit")} تحديث صفحة الإغلاق</button>`;
   } else {
     const instant = !!s.record?.instant;
     actions = `
@@ -560,9 +564,11 @@ function siteParts(s) {
     : "";
 
   const msg = linked ? `
-    <details class="msg" ${locked || drafts.has(name) ? "open" : ""}>
-      <summary>${icon("edit")} سبب الإغلاق (يظهر للزوار)</summary>
-      <label class="sr-only" for="msg-${n}">سبب الإغلاق</label>
+    <details class="msg" ${locked || drafts.has(name) || svcDrafts.has(name) ? "open" : ""}>
+      <summary>${icon("edit")} صفحة الإغلاق (تظهر للزوار)</summary>
+      <label for="svc-${n}">اسم الخدمة</label>
+      <input id="svc-${n}" data-svc="${n}" value="${esc(serviceName)}" placeholder="${n}" autocomplete="off">
+      <label for="msg-${n}">سبب الإغلاق</label>
       <textarea id="msg-${n}" data-msg="${n}">${esc(message)}</textarea>
     </details>` : "";
 
@@ -750,6 +756,8 @@ $view.addEventListener("click", (ev) => {
 $view.addEventListener("input", (ev) => {
   const t = ev.target.closest("textarea[data-msg]");
   if (t) drafts.set(t.dataset.msg, t.value);
+  const i = ev.target.closest("input[data-svc]");
+  if (i) svcDrafts.set(i.dataset.svc, i.value);
 });
 
 $view.addEventListener("click", async (ev) => {
@@ -761,6 +769,8 @@ $view.addEventListener("click", async (ev) => {
   if (!s) return;
   const msgEl = $view.querySelector(`textarea[data-msg="${CSS.escape(name)}"]`);
   const message = (msgEl?.value || "").trim() || DEFAULT_MESSAGE;
+  const svcEl = $view.querySelector(`input[data-svc="${CSS.escape(name)}"]`);
+  const serviceName = (svcEl?.value ?? s.record?.serviceName ?? "").trim();
 
   if (act === "lock" && !confirm(`إطفاء الموقع "${name}"؟\nسيظهر للزوار: ${message}`)) return;
   if (act === "unlock" && !confirm(`تشغيل الموقع "${name}" من جديد؟`)) return;
@@ -777,13 +787,13 @@ $view.addEventListener("click", async (ev) => {
       await linkSite(s);
       toast(`تم ربط ${name}`, "ok");
     } else if (act === "lock") {
-      await lockSite(s, message);
-      drafts.delete(name);
+      await lockSite(s, message, serviceName);
+      drafts.delete(name); svcDrafts.delete(name);
       toast(`تم إطفاء ${name}. قد يستغرق ظهور صفحة الإغلاق دقيقة أو دقيقتين.`, "ok");
     } else if (act === "update") {
-      await lockSite(s, message);
-      drafts.delete(name);
-      toast(`تم تحديث رسالة ${name}`, "ok");
+      await lockSite(s, message, serviceName);
+      drafts.delete(name); svcDrafts.delete(name);
+      toast(`تم تحديث صفحة إغلاق ${name}`, "ok");
     } else if (act === "unlock") {
       const note = await unlockSite(s);
       toast(`تم تشغيل ${name}. قد يستغرق ظهور الموقع دقيقة أو دقيقتين.`, "ok");
