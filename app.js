@@ -6,13 +6,16 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=9";
-import { maintenancePage } from "./maintenance-template.js?v=9";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=10";
+import { maintenancePage } from "./maintenance-template.js?v=10";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 
 const MAINT_BRANCH = "maintenance";
+// مواقع Cloudflare Pages: Cloudflare تنشر دائماً من فرع live، واللوحة تجعله يشير
+// إلى صفحة الإغلاق (maintenance) أو إلى فرع الموقع (liveSource، عادةً main)
+const LIVE_BRANCH = "live";
 const TOKEN_KEY = "qb-omnis.github-token";
 const VIEW_KEY = "qb-omnis.view";
 const THEME_KEY = "qb-omnis.theme";
@@ -75,7 +78,8 @@ const $searchArea = document.getElementById("search-area");
 const $q = document.getElementById("q");
 
 let auth, db, currentUser = null;
-let sites = [];              // [{ repo, pages, record }]
+let sites = [];              // [{ repo, pages, record, cf? }]
+let allRepos = [];           // كل مستودعات الحساب (لنافذة إضافة موقع Cloudflare)
 const busy = new Map();      // اسم المستودع ← { label, step, total, text }
 let visits = {};             // اسم المستودع ← { days, last30, prev30, total } أو { error }
 let legacyVisits = {};       // العدّاد القديم visits/{site} = { total, d<يوم>: عدد } (زيارات تشغيل فقط)
@@ -358,8 +362,57 @@ async function ghAll(path) {
 
 const isLocked = (s) => s.pages?.build_type === "legacy" && s.pages?.source?.branch === MAINT_BRANCH;
 
+// ───── Cloudflare Pages ─────
+
+const isCloudflare = (s) => s.record?.host === "cloudflare";
+const cfSource = (s) => s.record?.liveSource || s.repo.default_branch || "main";
+
+/** sha آخر commit في الفرع، أو null إن لم يوجد الفرع */
+async function refSha(owner, name, branch) {
+  try {
+    const ref = await gh(`/repos/${owner}/${name}/git/ref/heads/${encodeURIComponent(branch)}`);
+    return ref?.object?.sha || null;
+  } catch (e) {
+    if (e.status === 404) return null;
+    throw e;
+  }
+}
+
+/** يجعل فرع live يشير إلى sha (ينشئه إن لم يوجد). كل تغيير هنا = push، فتنشر Cloudflare تلقائياً. */
+async function setLive(owner, name, sha) {
+  if (!sha) throw new Error("لم أجد الفرع المطلوب للنشر");
+  try {
+    await gh(`/repos/${owner}/${name}/git/refs/heads/${LIVE_BRANCH}`, { method: "PATCH", body: { sha, force: true } });
+  } catch (e) {
+    if (e.status !== 404 && e.status !== 422) throw e;
+    await gh(`/repos/${owner}/${name}/git/refs`, { method: "POST", body: { ref: `refs/heads/${LIVE_BRANCH}`, sha } });
+  }
+}
+
+/**
+ * حالة موقع Cloudflare من فروع GitHub: مغلق إذا كان live = maintenance.
+ * يعيد { pages, cf } حيث pages كائن بنفس شكل GitHub Pages حتى تعمل بقية اللوحة كما هي.
+ */
+async function loadCfState(repo, rec) {
+  const owner = repo.owner.login, name = repo.name;
+  const source = rec?.liveSource || repo.default_branch || "main";
+  const [live, maint, src] = await Promise.all([
+    refSha(owner, name, LIVE_BRANCH), refSha(owner, name, MAINT_BRANCH), refSha(owner, name, source),
+  ]);
+  const locked = !!live && live === maint;
+  return {
+    cf: { live, maint, src, source, missing: !live, behind: !!live && !locked && live !== src },
+    pages: {
+      host: "cloudflare", build_type: "legacy",
+      source: { branch: locked ? MAINT_BRANCH : source, path: "/" },
+      html_url: rec?.url || null,
+    },
+  };
+}
+
 function describeSource(pages) {
   if (!pages) return "غير معروف";
+  if (pages.host === "cloudflare") return `Cloudflare · فرع ${pages.source?.branch || "?"}`;
   if (pages.build_type === "workflow") return "GitHub Actions";
   const src = pages.source || {};
   return `فرع ${src.branch}${src.path && src.path !== "/" ? " " + src.path : ""}`;
@@ -392,6 +445,7 @@ async function writeMaintenanceBranch(owner, name, message, page = {}) {
       method: "POST", body: { ref: `refs/heads/${MAINT_BRANCH}`, sha: commit.sha },
     });
   }
+  return commit.sha;
 }
 
 async function requestPagesBuild(owner, name) {
@@ -445,7 +499,8 @@ function addSnippet(html, name) {
  */
 async function setInstantLock(s, enable) {
   const owner = s.repo.owner.login, name = s.repo.name;
-  const cfg = originalConfig(s.pages);
+  const cf = isCloudflare(s);
+  const cfg = cf ? { build_type: "legacy", source: { branch: cfSource(s), path: "/" } } : originalConfig(s.pages);
   const workflow = cfg.build_type === "workflow";
   const branch = workflow ? s.repo.default_branch : cfg.source.branch;
   const srcPath = workflow ? "/" : (cfg.source.path || "/");
@@ -489,6 +544,8 @@ async function setInstantLock(s, enable) {
       },
     });
     await gh(`/repos/${owner}/${name}/git/refs/heads/${branch}`, { method: "PATCH", body: { sha: commit.sha } });
+    // Cloudflare: الموقع المفتوح يُنشر من live، فننقله إلى الـ commit الجديد
+    if (cf && !isLocked(s)) await setLive(owner, name, commit.sha);
   }
   await saveRecord(name, { instant: enable });
   return { count: changes.length, branch };
@@ -607,10 +664,15 @@ async function lockSite(s, { message, serviceName = "", reason = "custom", retur
     enabled: false, message, serviceName, reason, returnAt, headline, owner, repo: name,
     ...(alreadyLocked ? {} : { original: originalConfig(s.pages), lockedAt: serverTimestamp() }),
   });
-  // 2) الإغلاق الحقيقي على GitHub Pages
+  // 2) الإغلاق الحقيقي على GitHub Pages أو Cloudflare Pages
   try {
     onStep(2, "كتابة صفحة الإغلاق");
-    await writeMaintenanceBranch(owner, name, message, { serviceName, closedAt, headline, returnAt });
+    const sha = await writeMaintenanceBranch(owner, name, message, { serviceName, closedAt, headline, returnAt });
+    if (isCloudflare(s)) {
+      onStep(3, "نشر صفحة الإغلاق على Cloudflare");
+      await setLive(owner, name, sha);
+      return;
+    }
     if (!alreadyLocked) {
       onStep(3, "تحويل مصدر النشر");
       await gh(`/repos/${owner}/${name}/pages`, {
@@ -629,7 +691,11 @@ async function unlockSite(s, { redeploy = true } = {}, onStep = () => {}) {
   const orig = s.record?.original || { build_type: "legacy", source: { branch: s.repo.default_branch, path: "/" } };
   let note = "";
   onStep(1, "إرجاع مصدر النشر الأصلي");
-  if (orig.build_type === "workflow") {
+  if (isCloudflare(s)) {
+    const branch = orig.source?.branch && orig.source.branch !== MAINT_BRANCH ? orig.source.branch : cfSource(s);
+    onStep(2, `نشر فرع ${branch} على Cloudflare`);
+    await setLive(owner, name, await refSha(owner, name, branch));
+  } else if (orig.build_type === "workflow") {
     await gh(`/repos/${owner}/${name}/pages`, { method: "PUT", body: { build_type: "workflow" } });
     if (redeploy) {
       onStep(2, "إعادة تشغيل آخر عملية نشر");
@@ -654,16 +720,20 @@ async function loadSites() {
   $view.innerHTML = loadingView("جارٍ جلب المستودعات من GitHub…");
   try {
     const repos = await ghAll("/user/repos?affiliation=owner&sort=updated");
-    const withPages = repos.filter((r) => r.has_pages && r.name !== DASHBOARD_REPO);
+    allRepos = repos.filter((r) => r.name !== DASHBOARD_REPO);
     const [snap] = await Promise.all([getDocs(collection(db, "sites")), loadExtras()]);
     const records = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
+    // مواقع GitHub Pages + مواقع Cloudflare Pages المسجّلة في Firestore (host: "cloudflare")
+    const withPages = allRepos.filter((r) => r.has_pages || records[r.name]?.host === "cloudflare");
     const linked = withPages.map((r) => r.name).filter((n) => records[n]?.owner);
     const visitsLoaded = loadVisits(linked).catch(() => { visitsAvailable = false; });
     sites = await Promise.all(withPages.map(async (repo) => {
+      const record = records[repo.name] || null;
+      if (record?.host === "cloudflare") return { repo, record, ...(await loadCfState(repo, record)) };
       let pages = null;
       try { pages = await gh(`/repos/${repo.owner.login}/${repo.name}/pages`); }
       catch (e) { if (e.status !== 404) throw e; }
-      return { repo, pages, record: records[repo.name] || null };
+      return { repo, pages, record };
     }));
     await visitsLoaded;
     sites = sites.filter((s) => s.pages);
@@ -687,9 +757,13 @@ async function loadSites() {
 async function refreshOne(name) {
   const s = sites.find((x) => x.repo.name === name);
   if (!s) return;
-  try { s.pages = await gh(`/repos/${s.repo.owner.login}/${name}/pages`); } catch {}
   const d = await getDoc(doc(db, "sites", name));
   s.record = d.exists() ? d.data() : null;
+  if (isCloudflare(s)) {
+    try { Object.assign(s, await loadCfState(s.repo, s.record)); } catch {}
+  } else {
+    try { s.pages = await gh(`/repos/${s.repo.owner.login}/${name}/pages`); } catch {}
+  }
 }
 
 // ───────────────────────── بيانات العرض ─────────────────────────
@@ -900,6 +974,8 @@ function siteCard(s) {
         <div class="chips">
           <button class="chip chip-btn" data-act="category" data-name="${esc(name)}" title="تغيير التصنيف"><span class="swatch" style="${toneStyle(cat.tone)}"></span>${esc(cat.label)}</button>
           <span class="chip">${icon("branch")}${esc(source)}</span>
+          ${s.cf?.missing ? `<span class="chip warn" title="أنشئه من الإعدادات ← إضافة موقع Cloudflare">${icon("alert")}فرع ${LIVE_BRANCH} غير موجود</span>` : ""}
+          ${s.cf?.behind ? `<button class="chip chip-btn warn" data-act="cf-publish" data-name="${esc(name)}" title="في فرع ${esc(s.cf.source)} تعديلات لم تُنشر بعد">${icon("refresh")}تحديث غير منشور</button>` : ""}
           ${s.record?.instant ? `<span class="chip warn">${icon("zap")}فوري</span>` : ""}
           ${s.repo.private ? `<span class="chip">${icon("lock")}خاص</span>` : ""}
         </div>
@@ -1297,6 +1373,14 @@ function renderSettingsView() {
         <button class="btn" data-act="theme">تبديل</button>
       </div>
       <div class="list-item">
+        <span class="dlg-icon" style="${toneStyle("orange")};width:34px;height:34px;border-radius:9px">${icon("globe")}</span>
+        <div class="grow"><b>مواقع Cloudflare Pages</b>
+          <p>${sites.filter(isCloudflare).length
+            ? `${sites.filter(isCloudflare).map((s) => esc(serviceOf(s))).join("، ")}. `
+            : ""}أضف مستودعاً تنشره Cloudflare من فرع <code>${LIVE_BRANCH}</code> حتى تغلقه وتفتحه من اللوحة.</p></div>
+        <button class="btn" data-act="add-cf">${icon("plus", "sm")}إضافة</button>
+      </div>
+      <div class="list-item">
         <span class="dlg-icon" style="${toneStyle(visitsAvailable ? "success" : "warn")};width:34px;height:34px;border-radius:9px">${icon("chart")}</span>
         <div class="grow"><b>عدّاد الزيارات</b>
           <p>${visitsAvailable
@@ -1370,12 +1454,14 @@ function siteMenu(anchor, s) {
     <button data-menu="category">${icon("tag")}تغيير التصنيف<span class="hint">${esc(categoryOf(s).label)}</span></button>
     ${linked ? `<button data-menu="service">${icon("edit")}تعديل اسم الخدمة</button>` : ""}
     ${linked && !locked ? `<button data-menu="instant">${icon("zap")}الإغلاق الفوري<span class="hint">${instant ? "مفعّل" : "غير مفعّل"}</span></button>` : ""}
+    ${isCloudflare(s) && !locked ? `<button data-menu="publish">${icon("refresh")}نشر آخر تحديث<span class="hint">${s.cf?.behind ? "يوجد جديد" : `فرع ${esc(cfSource(s))}`}</span></button>` : ""}
     <a href="${esc(s.repo.html_url)}" target="_blank" rel="noopener" data-menu="noop">${icon("branch")}فتح المستودع على GitHub</a>
     ${linked && !locked ? `<hr><button data-menu="unlink" class="danger-text">${icon("unlink")}فك الربط</button>` : ""}`, {
     copy: () => navigator.clipboard?.writeText(url).then(() => toast({ kind: "ok", title: "تم نسخ الرابط", text: url })),
     category: () => categoryDialog(s),
     service: () => serviceDialog(s),
     instant: () => runAction(instant ? "instant-off" : "instant-on", s),
+    publish: () => runAction("cf-publish", s),
     unlink: () => runAction("unlink", s),
   });
 }
@@ -1530,6 +1616,83 @@ function openDialog(s) {
   };
 }
 
+/**
+ * إضافة موقع Cloudflare Pages (أو تعديل رابطه وفرعه).
+ * ينشئ فرع live إن لم يوجد: على صفحة الإغلاق إن اختير "مغلق"، وإلا على فرع الموقع.
+ * بعدها يجب ضبط Cloudflare مرة واحدة: Production branch = live.
+ */
+function cfDialog() {
+  const repos = [...allRepos].sort((a, b) => a.name.localeCompare(b.name));
+  if (!repos.length) { toast({ kind: "warn", title: "لا توجد مستودعات", text: "حدّث الصفحة بعد إدخال مفتاح GitHub.", duration: 5000 }); return; }
+  const m = openModal(`
+    ${dlgHead({ iconName: "globe", tone: "orange", title: "إضافة موقع Cloudflare Pages",
+      text: `اللوحة تغلق الموقع وتفتحه بتحريك فرع <code>${LIVE_BRANCH}</code>، وCloudflare تنشره تلقائياً.` })}
+    <div class="dlg-body">
+      <div class="field"><label for="cf-repo">المستودع</label>
+        <select id="cf-repo" style="width:100%">${repos.map((r) => `<option value="${esc(r.name)}">${esc(r.name)}${r.private ? " (خاص)" : ""}${sites.some((s) => s.repo.name === r.name && isCloudflare(s)) ? " · مضاف" : ""}</option>`).join("")}</select></div>
+      <div class="field"><label for="cf-url">رابط الموقع</label>
+        <input id="cf-url" dir="ltr" placeholder="https://example.qb-flow.com" autocomplete="off"></div>
+      <div class="field"><label for="cf-src">فرع الموقع (يُنشر عند الفتح)</label>
+        <input id="cf-src" dir="ltr" autocomplete="off"></div>
+      <div class="field"><label for="cf-state">حالة الموقع الآن</label>
+        <select id="cf-state" style="width:100%"><option value="off">مغلق (صفحة الإغلاق)</option><option value="on">مفتوح</option></select></div>
+      <div class="options"><div class="info">${icon("info")}<span>بعد الإضافة، افتح Cloudflare ← Workers &amp; Pages ← المشروع ← Settings ← Build ← Branch control،
+        واجعل <b>Production branch</b> = <code>${LIVE_BRANCH}</code>، و<b>Preview branch</b> = None.</span></div></div>
+    </div>
+    <div class="dlg-foot"><span class="note"></span><button class="btn lg" data-close>إلغاء</button>
+      <button class="btn lg primary" id="dlg-ok">حفظ</button></div>`, { size: "sm" });
+  const $ = (id) => m.overlay.querySelector(id);
+  const fill = () => {
+    const repo = repos.find((r) => r.name === $("#cf-repo").value);
+    const rec = sites.find((s) => s.repo.name === repo.name)?.record || {};
+    $("#cf-url").value = rec.url || rec.pagesUrl || "";
+    $("#cf-src").value = rec.liveSource || repo.default_branch || "main";
+    $("#cf-state").value = rec.enabled === false ? "off" : "on";
+  };
+  $("#cf-repo").addEventListener("change", fill);
+  fill();
+  $("#dlg-ok").onclick = async () => {
+    const repo = repos.find((r) => r.name === $("#cf-repo").value);
+    let url = $("#cf-url").value.trim();
+    const source = $("#cf-src").value.trim() || repo.default_branch || "main";
+    const closed = $("#cf-state").value === "off";
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+    if (!url) { toast({ kind: "warn", title: "اكتب رابط الموقع", duration: 4000 }); return; }
+    m.close();
+    const owner = repo.owner.login, name = repo.name;
+    const progress = toast({ kind: "progress", title: `إضافة «${name}»…`, text: "فحص الفروع" });
+    try {
+      const old = (await getDoc(doc(db, "sites", name))).data() || {};
+      const srcSha = await refSha(owner, name, source);
+      if (!srcSha) throw new Error(`الفرع ${source} غير موجود في المستودع`);
+      let maint = await refSha(owner, name, MAINT_BRANCH);
+      if (!maint) {
+        progress.update({ text: "إنشاء صفحة الإغلاق" });
+        maint = await writeMaintenanceBranch(owner, name, old.message || DEFAULT_MESSAGE, { serviceName: old.serviceName || "" });
+      }
+      if (!(await refSha(owner, name, LIVE_BRANCH))) {
+        progress.update({ text: `إنشاء فرع ${LIVE_BRANCH}` });
+        await setLive(owner, name, closed ? maint : srcSha);
+      }
+      await saveRecord(name, {
+        host: "cloudflare", url, liveSource: source, owner, repo: name, pagesUrl: url,
+        enabled: !closed,
+        message: old.message || DEFAULT_MESSAGE,
+        ...(old.linkedAt ? {} : { linkedAt: serverTimestamp() }),
+        ...(closed && !old.original ? { original: { build_type: "legacy", source: { branch: source, path: "/" } } } : {}),
+      });
+      addLog({ type: "link", site: name, title: `إضافة ${old.serviceName || name} (Cloudflare)`, detail: `فرع ${LIVE_BRANCH} ← ${closed ? MAINT_BRANCH : source}` });
+      toast({ kind: "ok", title: `تمت إضافة «${old.serviceName || name}»`,
+        text: `تأكد في Cloudflare أن Production branch = ${LIVE_BRANCH}.`, duration: 9000 });
+      loadSites();
+    } catch (e) {
+      toast({ kind: "error", title: "تعذّرت الإضافة", text: e.message });
+    } finally {
+      progress.close();
+    }
+  };
+}
+
 function categoryDialog(s) {
   const cur = s.record?.category || "none";
   const opts = [...config.categories.map((c, i) => ({ ...c, tone: TONES[i % TONES.length] })), { id: "none", label: "بلا تصنيف", tone: "muted" }];
@@ -1627,6 +1790,7 @@ const ACTIONS = {
   "instant-on": { label: "جارٍ التفعيل…", total: 0 },
   "instant-off": { label: "جارٍ الإزالة…", total: 0 },
   unlink: { label: "جارٍ فك الربط…", total: 0 },
+  "cf-publish": { label: "جارٍ النشر…", total: 0 },
 };
 
 async function runAction(act, s, opts = {}) {
@@ -1703,8 +1867,16 @@ async function runAction(act, s, opts = {}) {
     } else if (act === "unlink") {
       onStep(1, "حذف سجل الموقع");
       await deleteDoc(doc(db, "sites", name));
+      // موقع Cloudflare يُعرف من سجله فقط، فبعد حذفه يختفي من القائمة (يُضاف من جديد من الإعدادات)
+      if (isCloudflare(s)) sites = sites.filter((x) => x !== s);
       addLog({ type: "unlink", site: name, title: `فك ربط ${service}`, detail: "حُذف السجل من اللوحة" });
       toast({ kind: "ok", title: `تم فك ربط «${service}»` });
+    } else if (act === "cf-publish") {
+      const branch = cfSource(s);
+      onStep(1, `نشر آخر تحديث من فرع ${branch}`);
+      await setLive(s.repo.owner.login, name, await refSha(s.repo.owner.login, name, branch));
+      addLog({ type: "update", site: name, title: `نشر تحديث ${service}`, detail: `Cloudflare ← فرع ${branch}` });
+      toast({ kind: "ok", title: `تم نشر آخر تحديث لـ «${service}»`, text: `Cloudflare تنشر فرع ${branch} خلال دقيقة تقريباً.` });
     }
   } catch (e) {
     const perm = e.status === 401 || e.status === 403 || e.status === 404;
@@ -1762,13 +1934,14 @@ async function updateAll() {
     progress.update({ text: `${i + 1} من ${targets.length}: ${serviceOf(s)}`, step: i + 1, total: targets.length });
     try {
       if (off) {
-        await writeMaintenanceBranch(s.repo.owner.login, name, r.message || DEFAULT_MESSAGE, {
+        const sha = await writeMaintenanceBranch(s.repo.owner.login, name, r.message || DEFAULT_MESSAGE, {
           serviceName: r.serviceName || "",
           closedAt: r.lockedAt?.toDate?.() || null,
           headline: r.headline || (r.reason ? reasonOf(r.reason).headline : ""),
           returnAt: r.reason === "maintenance" ? (r.returnAt || "") : "",
         });
-        await requestPagesBuild(s.repo.owner.login, name);
+        if (isCloudflare(s)) await setLive(s.repo.owner.login, name, sha);
+        else await requestPagesBuild(s.repo.owner.login, name);
         pages++;
       } else {
         const { count } = await setInstantLock(s, true);
@@ -1833,6 +2006,7 @@ $view.addEventListener("click", (ev) => {
   }
   if (act === "token") { renderTokenForm(); return; }
   if (act === "theme") { toggleTheme(); renderSites(); return; }
+  if (act === "add-cf") { cfDialog(); return; }
 
   const s = sites.find((x) => x.repo.name === btn.dataset.name);
   if (!s) return;
