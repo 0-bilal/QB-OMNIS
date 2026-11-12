@@ -6,12 +6,12 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=11";
-import { maintenancePage } from "./maintenance-template.js?v=11";
-import { guideHTML, bindGuide } from "./guide.js?v=11";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=12";
+import { maintenancePage } from "./maintenance-template.js?v=12";
+import { guideHTML, bindGuide } from "./guide.js?v=12";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 
 const MAINT_BRANCH = "maintenance";
 // مواقع Cloudflare Pages: Cloudflare تنشر دائماً من فرع live، واللوحة تجعله يشير

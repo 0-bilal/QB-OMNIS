@@ -617,3 +617,38 @@ legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
   .g-steps { margin-inline-start: 6px; padding-inline-start: 8px; }
   .g-sec-body { padding-inline: 12px; }
 }
+
+/* الدليل: الصور وخريطة المراحل (الإصدار 12) */
+.g-fig { margin: 12px 0; max-width: 100%; }
+.g-fig.sm { max-width: 420px; }
+.g-fig.md { max-width: 640px; }
+.g-fig.lg { max-width: 100%; }
+.g-zoom { display: block; width: 100%; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface-2); cursor: zoom-in; box-shadow: var(--shadow-sm); transition: border-color .12s, box-shadow .12s; }
+.g-zoom:hover { border-color: var(--accent); box-shadow: var(--shadow-md); }
+.g-zoom:focus-visible { box-shadow: var(--focus); }
+.g-zoom img { display: block; width: 100%; height: auto; }
+.g-fig figcaption { margin-top: 6px; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+.g-figs { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.g-figs .g-fig { flex: 1 1 260px; margin: 12px 0 0; }
+.g-map { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 14px 0 8px; }
+.guide .g-map-item { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 84px; padding: 10px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); text-decoration: none; color: var(--fg); text-align: center; }
+.g-map-item:hover { border-color: var(--accent); }
+.g-map-item b { font-size: 12.5px; }
+.g-map-item small { font-size: 10.5px; color: var(--muted); }
+.g-map-item .g-num { width: 26px; height: 26px; font-size: 12px; }
+.g-map-arrow { color: var(--muted); font-weight: 700; }
+.g-legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12px; margin-bottom: 4px; }
+.g-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.g-legend i { width: 16px; height: 11px; border-radius: 3px; border: 3px solid; }
+.g-legend i.o { border-color: #f97316; }
+.g-legend i.g { border-color: #16a34a; }
+.g-legend i.r { border-color: #dc2626; }
+.g-lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(5, 8, 15, .86); display: flex; align-items: center; justify-content: center; padding: 24px 16px; cursor: zoom-out; }
+.g-lightbox figure { margin: 0; max-width: min(1200px, 100%); max-height: 100%; display: flex; flex-direction: column; gap: 10px; }
+.g-lightbox img { max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; border-radius: 10px; background: #fff; }
+.g-lightbox figcaption { color: #e8edf5; font-size: 14px; text-align: center; line-height: 1.7; }
+.g-lb-close { position: absolute; top: 14px; left: 14px; }
+@media (max-width: 640px) {
+  .g-map-arrow { display: none; }
+  .g-map-item { flex: 1 1 30%; min-width: 0; }
+}

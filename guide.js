@@ -19,6 +19,15 @@ const branch = () => `<code dir="ltr">${v("branch")}</code>`;
 const c = (t) => `<code dir="ltr">${t}</code>`;
 const path = (...parts) => `<span class="g-path">${parts.map((p) => `<b>${p}</b>`).join("<i>←</i>")}</span>`;
 
+// صور توضيحية (مقصوصة من لقطات حقيقية أثناء نقل duo-mobile). الإطار: برتقالي = اضغط هنا، أخضر = صحيح، أحمر = خطأ.
+const IMG = "guide-img/";
+const fig = (file, caption, size = "") => `
+  <figure class="g-fig ${size}">
+    <button type="button" class="g-zoom" data-zoom="${IMG}${file}" data-cap="${escHTML(caption.replace(/<[^>]+>/g, ""))}" aria-label="تكبير الصورة">
+      <img src="${IMG}${file}" alt="${escHTML(caption.replace(/<[^>]+>/g, ""))}" loading="lazy"></button>
+    <figcaption>${caption}</figcaption>
+  </figure>`;
+
 const note = (kind, html) => `<div class="g-note ${kind}"><span class="g-note-i">${{ warn: "!", info: "i", ok: "✓", stop: "✕" }[kind]}</span><div>${html}</div></div>`;
 const table = (head, rows) => `<div class="g-table-wrap"><table class="g-table"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
   <tbody>${rows.map((r) => `<tr>${r.map((x) => `<td>${x}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -30,8 +39,8 @@ const step = (id, title, body = "") => `
     <label class="g-tick"><input type="checkbox" data-check="${id}" aria-label="تمّت: ${escHTML(title.replace(/<[^>]+>/g, ""))}"><span></span></label>
     <div class="g-step-body"><b class="g-step-title">${title}</b>${body ? `<div class="g-step-text">${body}</div>` : ""}</div>
   </li>`;
-const phase = (n, title, sub, steps) => `
-  <div class="g-phase" data-phase>
+const phase = (n, title, sub, steps, id = "") => `
+  <div class="g-phase" data-phase ${id ? `id="${id}"` : ""}>
     <div class="g-phase-head"><span class="g-num">${n}</span><div><h3>${title}</h3>${sub ? `<p>${sub}</p>` : ""}</div>
       <span class="g-phase-count" data-count></span></div>
     <ol class="g-steps">${steps.join("")}</ol>
@@ -82,11 +91,19 @@ function migrate() {
   return `
     <p>هذه هي نفس الخطوات التي نقلنا بها ${c("duo-mobile." + DOMAIN)}، مع الأخطاء التي واجهناها وحلولها.
       اكتب بيانات المشروع في الخانات أعلى الدليل، فتتعبّأ الأسماء في الخطوات. ضع ✓ على كل خطوة تنتهي منها، ويُحفظ تقدّمك لكل مشروع.</p>
+    <div class="g-map" role="list" aria-label="مراحل النقل">
+      ${[["0", "التحضير", "GitHub"], ["1", "مشروع Pages", "Cloudflare"], ["2", "الفروع", "Cloudflare"], ["3", "السب دومين", "GitHub وCloudflare"],
+        ["4", "إخفاء GitHub", "GitHub"], ["5", "QB-OMNIS", "اللوحة وCloudflare"], ["6", "التحقق", "PowerShell"]].map(([n, t, w]) =>
+        `<a role="listitem" href="#g-ph${n}" data-jump class="g-map-item"><span class="g-num">${n}</span><b>${t}</b><small>${w}</small></a>`).join('<span class="g-map-arrow" aria-hidden="true">←</span>')}
+    </div>
+    <div class="g-legend"><span><i class="o"></i>اضغط هنا</span><span><i class="g"></i>الوضع الصحيح</span><span><i class="r"></i>خطأ أو انتبه</span>
+      <span class="muted">اضغط أي صورة لتكبيرها.</span></div>
     ${note("info", `انقل المشاريع <b>على دفعات</b>: في أول 48 ساعة من الحساب يوجد حد لعدد المشاريع الجديدة. وابدأ بالمواقع المغلقة، لأن توقفها المؤقت لا يضر.`)}
 
     ${phase(0, "التحضير", "قبل أن تلمس أي إعداد", [
       step("prep-branch", `اعرف <u>من أي فرع</u> ينشر GitHub الموقع الآن`,
         `افتح ${path("GitHub", v("repo"), "Settings", "Pages")} واقرأ السطر <i>Your GitHub Pages site is currently being built from the … branch</i>.
+        ${fig("07-github-pages.png", "السطر المحدد يذكر الفرع الذي ينشر منه GitHub. هنا <b>maintenance</b>، أي أن الموقع مغلق.", "md")}
         ${note("warn", `إذا كان الفرع ${c("maintenance")}، فالموقع <b>مغلق من QB-OMNIS</b>، وفرعه الحقيقي هو المكتوب في بطاقته بجانب «الأصلي». في <code>duo-mobile</code> كان الفرع
           ${c("maintenance")}، فنشرت Cloudflare فرع ${c("main")} وظهر المنيو الكامل للزوار. اكتب الفرع الصحيح في خانة «الفرع الذي يُنشر الآن» أعلى الدليل.`)}`),
       step("prep-type", "تأكد من نوع المشروع",
@@ -98,12 +115,13 @@ function migrate() {
         ])}`),
       step("prep-paths", "تأكد أن مسارات الملفات نسبية",
         `مثل ${c("css/style.css")}، وليس ${c("/" + "اسم-المشروع" + "/css/style.css")}. في Vite اجعل ${c("base: '/'")}.`),
-    ])}
+    ], "g-ph0")}
 
     ${phase(1, "إنشاء مشروع Cloudflare Pages", `ينشر نسخة تجريبية على ${v("project")}.pages.dev دون أن يمس السب دومين`, [
       step("cf-create", "افتح صفحة الإنشاء", `${path("Cloudflare", "Workers &amp; Pages", "Create")}`),
       step("cf-legacy", `اضغط <u>Continue to Pages</u> وليس Continue with GitHub`,
-        `ستفتح صفحة <b>Create an app</b>، وهي طريقة <b>Workers</b> ولا نريدها. أسفل المربع، بجانب <i>Need to use the legacy Pages workflow?</i>، اضغط الرابط <b>Continue to Pages</b>.`),
+        `ستفتح صفحة <b>Create an app</b>، وهي طريقة <b>Workers</b> ولا نريدها. أسفل المربع، بجانب <i>Need to use the legacy Pages workflow?</i>، اضغط الرابط <b>Continue to Pages</b>.
+        ${fig("01-continue-to-pages.png", "لا تضغط Continue with GitHub. اضغط الرابط الصغير <b>Continue to Pages</b> في الأسفل.", "sm")}`),
       step("cf-import", "اختر الـ repo",
         `${path("Import an existing Git repository", "Get started")}، ثم الحساب ${c(GH_USER)}، ثم ${repo()}، ثم <b>Begin setup</b>.
         ${note("info", `ربط Cloudflare بحساب GitHub تم مرة واحدة، بصلاحية <b>All repositories</b>، فلا يحتاج كل مشروع ربطاً جديداً.`)}`),
@@ -113,16 +131,20 @@ function migrate() {
           ["Production branch", `${branch()} ⚠️ نفس الفرع من خطوة التحضير`],
           ["Framework preset", "None (للموقع العادي)"],
           ["Build command / Build output directory", "حسب جدول نوع المشروع"],
-        ])}`),
-      step("cf-deploy", "اضغط Save and Deploy", "انتظر رسالة <b>Success! Your project is deployed</b>، وتستغرق عادة أقل من دقيقة."),
-    ])}
+        ])}
+        ${fig("02-build-settings.png", "تحقق من <b>Production branch</b> قبل الضغط. في duo-mobile كان الصحيح <b>maintenance</b> وليس main.", "md")}`),
+      step("cf-deploy", "اضغط Save and Deploy", `انتظر رسالة <b>Success! Your project is deployed</b>، وتستغرق عادة أقل من دقيقة.
+        ${fig("03-deploy-success.png", "نجح النشر، والرابط التجريبي بجانب الرسالة.", "md")}`),
+    ], "g-ph1")}
 
     ${phase(2, "ضبط الفروع والتأكد من النسخة", "حتى لا يُنشر محتوى لا تريده", [
       step("br-preview", "أوقف نشر الفروع الأخرى",
         `${path("Continue to project", "Settings", "Build", "Branch control")} ← ✏️، ثم <b>Preview branch = None</b>، ثم Save.
-        ${note("warn", `بدون هذه الخطوة، كل فرع آخر يُنشر على رابط معاينة عام، مثل ${c("main." + "PROJECT.pages.dev")}، فيظهر المحتوى الحقيقي لموقع مغلق.`)}`),
+        ${note("warn", `بدون هذه الخطوة، كل فرع آخر يُنشر على رابط معاينة عام، مثل ${c("main." + "PROJECT.pages.dev")}، فيظهر المحتوى الحقيقي لموقع مغلق.`)}
+        ${fig("05-branch-control.png", "نافذة Branch control: الفرع في الأعلى، و<b>None</b> في Preview branch.", "sm")}`),
       step("br-check", `افتح ${c(v("project") + ".pages.dev")} وتأكد أن المحتوى صحيح`,
-        `يجب أن يطابق ما يظهر الآن على ${host()}.`),
+        `يجب أن يطابق ما يظهر الآن على ${host()}. وانظر في تبويب <b>Deployments</b> إلى عمود <b>Source</b>، فهو يذكر الفرع الذي نُشر.
+        ${fig("04-wrong-branch.png", "❌ الخطأ الذي حدث في duo-mobile: نُشر فرع <b>main</b> (المنيو الكامل) بدلاً من maintenance.", "lg")}`),
       step("br-fix", "إن ظهر محتوى خاطئ: غيّر الفرع وأعد النشر <small>(تخطَّ الخطوة إن كان صحيحاً)</small>",
         `<ol class="g-sub">
           <li>${path("Settings", "Build", "Branch control")}: غيّر <b>Production branch</b> إلى الفرع الصحيح، ثم Save.</li>
@@ -132,8 +154,9 @@ function migrate() {
         </ol>`),
       step("br-delete", "احذف أي نشر خاطئ",
         `${path("Deployments", "⋯ بجانب النشر الخاطئ", "Delete deployment")}.
-        ${note("warn", `كل نشر قديم يبقى متاحاً على رابط خاص به، مثل ${c("e588eabc." + "PROJECT.pages.dev")}، حتى بعد تغيير الفرع. لذلك احذف أي نشر يحتوي محتوى لا يجب أن يظهر.`)}`),
-    ])}
+        ${note("warn", `كل نشر قديم يبقى متاحاً على رابط خاص به، مثل ${c("e588eabc." + "PROJECT.pages.dev")}، حتى بعد تغيير الفرع. لذلك احذف أي نشر يحتوي محتوى لا يجب أن يظهر.`)}
+        ${fig("06-deployments-fixed.png", "✅ الأخضر: النشر الصحيح من maintenance. ❌ الأحمر: النشر الخاطئ من main، فاحذفه من زر <b>⋯</b> بجانبه.", "lg")}`),
+    ], "g-ph2")}
 
     ${phase(3, "نقل السب دومين", `من هنا يتوقف ${v("sub")}.${DOMAIN} لدقائق قليلة`, [
       step("dom-gh", "احذف السب دومين من GitHub Pages",
@@ -147,16 +170,18 @@ function migrate() {
         `${path("Workers &amp; Pages", v("project"), "Custom domains", "Set up a custom domain")}، اكتب ${host()}، ثم <b>Continue</b>، ثم <b>Activate domain</b>.
         Cloudflare تنشئ سجل الـ DNS بنفسها: ${c(v("sub") + " → " + v("project") + ".pages.dev")}، وحالته <b>Proxied</b> (برتقالي)، وهذا صحيح.`),
       step("dom-active", "انتظر حتى تصبح الحالة Active", "عادةً من دقيقة إلى بضع دقائق. حدّث الصفحة بـ F5."),
-    ])}
+    ], "g-ph3")}
 
     ${phase(4, "إخفاء GitHub", "", [
       step("hide-unpublish", "أوقف GitHub Pages",
         `${path("GitHub", v("repo"), "Settings", "Pages")} ← الزر الأحمر <b>Unpublish site</b>.
-        بعدها يجب أن يعطي ${c(`${GH_USER}.github.io/` + "REPO" + "/")} الخطأ 404.`),
+        بعدها يجب أن يعطي ${c(`${GH_USER}.github.io/` + "REPO" + "/")} الخطأ 404.
+        ${fig("07-github-pages.png", "زر <b>Unpublish site</b> في أعلى صفحة Pages. وCustom domain في الأسفل صار فارغاً بعد المرحلة 3.", "md")}`),
       step("hide-private", "حوّل الـ repo إلى Private",
         `${path("Settings", "General", "Danger Zone", "Change visibility", "Change to private")}، ثم أكّد الخطوات.
-        ${note("ok", "Cloudflare تستمر في النشر من الـ repo الخاص، فتطبيقها على GitHub يملك الصلاحية.")}`),
-    ])}
+        ${note("ok", "Cloudflare تستمر في النشر من الـ repo الخاص، فتطبيقها على GitHub يملك الصلاحية.")}
+        ${fig("08-danger-zone.png", "في آخر صفحة Settings ← General: زر <b>Change visibility</b>.", "md")}`),
+    ], "g-ph4")}
 
     ${phase(5, "ربطه بلوحة QB-OMNIS", "حتى تغلقه وتفتحه من هنا", [
       step("om-add", "أضف الموقع من الإعدادات",
@@ -167,16 +192,23 @@ function migrate() {
           ["فرع الموقع", "الفرع الحقيقي، عادةً main"],
           ["حالة الموقع الآن", "مغلق إن كان يعرض صفحة الإغلاق، وإلا مفتوح"],
         ])}
-        اضغط <b>حفظ</b>، فتنشئ اللوحة فرع ${c("live")}.`),
+        اضغط <b>حفظ</b>، فتنشئ اللوحة فرع ${c("live")}.
+        ${fig("09-omnis-add-cf.png", "❌ انتبه: النافذة اختارت مستودعاً آخر تلقائياً (b4kierm5)، ومعه رابط github.io. غيّر <b>المستودع</b> أولاً، ثم اكتب <b>الرابط</b>.", "sm")}`),
       step("om-card", "تحقق من بطاقة الموقع",
-        `يجب أن تظهر بالحالة الصحيحة، <b>وألا</b> تظهر شارة «فرع live غير موجود». وفي GitHub يجب أن يصبح للـ repo فرع اسمه ${c("live")}.`),
+        `يجب أن تظهر بالحالة الصحيحة، <b>وألا</b> تظهر شارة «فرع live غير موجود». وفي GitHub يجب أن يصبح للـ repo فرع اسمه ${c("live")}.
+        <div class="g-figs">
+          ${fig("10-omnis-card.png", "البطاقة بعد الإضافة: <b>مغلق · اشتراك منتهٍ</b>، والرابط على qb-flow.com.", "sm")}
+          ${fig("11-live-branch.png", "في GitHub ظهر فرع <b>live</b>، وصار للـ repo 3 فروع.", "md")}
+        </div>`),
       step("om-branch", `غيّر Production branch في Cloudflare إلى <u>live</u>`,
         `${path("Cloudflare", v("project"), "Settings", "Build", "Branch control")} ← ✏️، ثم <b>Production branch = live</b>، وAutomatic deployments ✅، وPreview = None، ثم Save.
-        ${note("stop", `الترتيب مهم: أضف الموقع في QB-OMNIS <b>قبل</b> هذه الخطوة، لأن فرع ${c("live")} يجب أن يكون موجوداً أولاً.`)}`),
+        ${note("stop", `الترتيب مهم: أضف الموقع في QB-OMNIS <b>قبل</b> هذه الخطوة، لأن فرع ${c("live")} يجب أن يكون موجوداً أولاً.`)}
+        ${fig("05-branch-control.png", `نفس نافذة المرحلة 2. اكتب هنا ${"live"} بدلاً من الفرع القديم.`, "sm")}`),
       step("om-test", "جرّب التحكم",
         `الموقع مغلق؟ اضغط <b>تعديل</b> ثم احفظ بنفس السبب. الموقع مفتوح؟ اختر ${path("⋯", "نشر آخر تحديث")}.
-        بعد دقيقة، يجب أن يظهر في ${path("Cloudflare", "Deployments")} نشر <b>Production</b> من فرع ${c("live")}.`),
-    ])}
+        بعد دقيقة، يجب أن يظهر في ${path("Cloudflare", "Deployments")} نشر <b>Production</b> من فرع ${c("live")}.
+        ${fig("12-deployments-live.png", "✅ النتيجة الصحيحة: Production من فرع <b>live</b>، والسب دومين في Domains. أسطر Preview تقول «No deployment available»، وهذا صحيح.", "lg")}`),
+    ], "g-ph5")}
 
     ${phase(6, "التحقق النهائي", "من PowerShell على جهازك", [
       step("ver-run", "شغّل الأوامر وقارن النتائج",
@@ -190,7 +222,7 @@ try { Invoke-WebRequest https://${GH_USER}.github.io/${v("repo")}/ -UseBasicPars
         ])}`),
       step("ver-http", "افتح الموقع في المتصفح", `افتح ${c("http://" + v("sub") + "." + DOMAIN)}: يجب أن يتحول تلقائياً إلى https، وأن يظهر القفل 🔒.`),
       step("ver-doc", "حدّث ملف التوثيق", `في ${c("qb-flow-domain-setup.md")}: جدول المشاريع، وجدول سجلات DNS، وجدول حالة النقل.`),
-    ])}`;
+    ], "g-ph6")}`;
 }
 
 function newProject() {
@@ -237,6 +269,7 @@ function omnis() {
       [c("maintenance"), "صفحة الإغلاق فقط (index.html و404.html)", "اللوحة"],
       [c("live"), "<b>ما يراه الزوار</b>: يشير إلى maintenance أو إلى main", "اللوحة"],
     ])}
+    ${fig("10-omnis-card.png", "بطاقة موقع على Cloudflare في اللوحة. الأزرار نفسها: فتح الموقع، وتعديل، وزر ⋯ لنشر آخر تحديث.", "sm")}
     <h4>ماذا يحدث عند كل زر؟</h4>
     ${table(["الزر", "ما تفعله اللوحة"], [
       ["إغلاق الموقع", `تكتب صفحة الإغلاق في ${c("maintenance")}، ثم تجعل ${c("live")} يشير إليها`],
@@ -348,6 +381,7 @@ function history() {
       ["2026-11-13", `ربط Cloudflare بـ GitHub (All repositories)، ونقل ${c("duo-mobile")}: نشر، وتصحيح الفرع إلى maintenance، وحذف النشر الخاطئ، ونقل الدومين، وإيقاف Pages، وجعل الـ repo خاصاً`],
       ["2026-11-13", `QB-OMNIS الإصدار 10: دعم Cloudflare عبر فرع ${c("live")}، وإضافة ${c("duo-mobile")}، وتجربة ناجحة`],
       ["2026-11-13", "QB-OMNIS الإصدار 11: هذا الدليل"],
+      ["2026-11-13", "QB-OMNIS الإصدار 12: صور توضيحية من خطوات نقل duo-mobile، وخريطة المراحل"],
     ])}
     <h4>ترتيب النقل القادم</h4>
     ${table(["المشروع", "الحالة"], [
@@ -425,6 +459,24 @@ const store = {
   set(k, val) { try { localStorage.setItem(k, JSON.stringify(val)); } catch {} },
 };
 
+/** تكبير صورة: طبقة فوق الصفحة، تُغلق بالضغط أو Escape */
+function openLightbox(src, cap = "") {
+  const prev = document.activeElement;
+  const box = document.createElement("div");
+  box.className = "g-lightbox";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", cap || "صورة");
+  box.innerHTML = `<figure><img src="${escHTML(src)}" alt="${escHTML(cap)}">${cap ? `<figcaption>${escHTML(cap)}</figcaption>` : ""}</figure>
+    <button type="button" class="btn g-lb-close" aria-label="إغلاق">✕</button>`;
+  const close = () => { box.remove(); document.removeEventListener("keydown", onKey, true); prev?.focus?.(); };
+  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+  box.addEventListener("click", close);
+  document.addEventListener("keydown", onKey, true);
+  document.body.appendChild(box);
+  box.querySelector(".g-lb-close").focus();
+}
+
 /** يربط التفاعل بعد إدراج guideHTML في الصفحة. icon(name) لرسم أيقونات الأقسام. */
 export function bindGuide(root, { icon } = {}) {
   if (icon) root.querySelectorAll("[data-icon]").forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
@@ -489,11 +541,18 @@ export function bindGuide(root, { icon } = {}) {
   });
 
   root.addEventListener("click", (e) => {
+    const zoom = e.target.closest("[data-zoom]");
+    if (zoom) { openLightbox(zoom.dataset.zoom, zoom.dataset.cap); return; }
     const jump = e.target.closest("[data-jump]");
     if (jump) {
       e.preventDefault();
       const target = root.querySelector(jump.getAttribute("href"));
-      if (target) { target.open = true; target.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      if (target) {
+        const sec = target.closest("details");
+        if (sec) sec.open = true;
+        if (target.tagName === "DETAILS") target.open = true;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
       return;
     }
     const copy = e.target.closest("[data-copy]");
