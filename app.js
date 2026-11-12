@@ -6,11 +6,12 @@ import {
   getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc,
   query, orderBy, limit, serverTimestamp, where, documentId, getAggregateFromServer, sum,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=10";
-import { maintenancePage } from "./maintenance-template.js?v=10";
+import { firebaseConfig, ADMIN_UID, DASHBOARD_REPO } from "./firebase-config.js?v=11";
+import { maintenancePage } from "./maintenance-template.js?v=11";
+import { guideHTML, bindGuide } from "./guide.js?v=11";
 
 // رقم الإصدار: يجب أن يطابق ?v= في index.html وapp.js وlock.js
-const APP_VERSION = "10";
+const APP_VERSION = "11";
 
 const MAINT_BRANCH = "maintenance";
 // مواقع Cloudflare Pages: Cloudflare تنشر دائماً من فرع live، واللوحة تجعله يشير
@@ -1163,6 +1164,7 @@ function renderSidebar() {
     ["templates", "messages", "رسائل الإغلاق الجاهزة", REASONS.length - 1 + config.templates.length],
     ["log", "clock", "سجل العمليات", ""],
     ["settings", "settings", "الإعدادات", ""],
+    ["guide", "info", "الدليل", ""],
   ];
   const cats = [
     { id: "all", label: "كل المواقع", tone: "neutral", n: sites.length },
@@ -1203,7 +1205,7 @@ function renderSites() {
   if (!document.getElementById("dash")) renderShell();
   $searchArea.hidden = false;
   renderSidebar();
-  const views = { sites: renderSitesView, templates: renderTemplatesView, log: renderLogView, settings: renderSettingsView };
+  const views = { sites: renderSitesView, templates: renderTemplatesView, log: renderLogView, settings: renderSettingsView, guide: renderGuideView };
   (views[ui.view] || renderSitesView)();
 }
 
@@ -1349,6 +1351,14 @@ function renderTemplatesView() {
           <div class="grow"><b>${esc(r.label)}</b><span class="badge">العنوان: ${esc(r.headline)}</span><p>${esc(r.message)}</p></div>
         </div>`).join("")}
     </section>`;
+}
+
+/** الدليل: محتواه في guide.js. لا نعيد رسمه إن كان معروضاً، حتى تبقى الأقسام المفتوحة ومكان التمرير. */
+function renderGuideView() {
+  const $c = document.getElementById("content");
+  if ($c.querySelector("#guide")) return;
+  $c.innerHTML = `<div id="guide" class="guide">${guideHTML({ repoNames: allRepos.map((r) => r.name).sort() })}</div>`;
+  bindGuide($c.querySelector("#guide"), { icon });
 }
 
 function renderLogView() {
